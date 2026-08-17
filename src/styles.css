@@ -38,7 +38,10 @@ input, select, textarea {
   padding: .6rem .9rem; background: var(--panel); border-bottom: 2px solid var(--cardinal);
   position: sticky; top: 0; z-index: 5;
 }
-.brand { font-weight: 800; letter-spacing: .02em; }
+.brand { font-weight: 800; letter-spacing: .02em; display: flex; align-items: center; gap: .55rem; }
+.crew { display: flex; gap: .18rem; align-items: center; }
+.crew svg { display: block; }
+.gavatars { display: flex; gap: .25rem; margin-bottom: .35rem; align-items: flex-end; }
 .potbadge { font-size: .85rem; color: var(--dim); display: flex; gap: .45rem; align-items: baseline; }
 .potbadge b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .potbadge em { font-style: normal; font-weight: 700; }

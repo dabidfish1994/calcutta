@@ -264,6 +264,7 @@ const actions = {
     if (state.auction.paused) return { error: "Draft is paused — resume first." };
     if (!TEAM_IDS.includes(team)) return { error: "Unknown team." };
     if (state.auction.sales[team]) return { error: "Already sold — reopen it instead." };
+    if (state.auction.onBlock === team) return {}; // already up — no-op, don't purge live bids
     snapshot(`${team} on the block`);
     state.auction.skipped = state.auction.skipped.filter(t => t !== team);
     // Fresh block = fresh bidding: dead bids from an earlier skip/clear must not resurface.
@@ -272,6 +273,7 @@ const actions = {
     state.auction.phase = "live";
   },
   clearBlock() {
+    if (state.auction.paused) return { error: "Draft is paused — resume first." };
     const team = state.auction.onBlock;
     snapshot(team ? `clearing ${team}` : "clearing block");
     if (team) state.auction.bids = state.auction.bids.filter(b => b.team !== team);
@@ -324,10 +326,16 @@ const actions = {
   editSale({ team, amount, group }) {
     const s = state.auction.sales[team];
     if (!s) return { error: "Team is not sold." };
-    if (group && !groupById(group)) return { error: "Unknown group." };
+    const gid = group || s.group;
+    const g = groupById(gid);
+    if (!g) return { error: "Unknown group." };
+    const newAmt = amount != null && Number(amount) > 0 ? Number(amount) : s.amount;
+    // Budget check excludes this sale's current charge against the target group.
+    const spentExcl = groupSpent(gid) - (s.group === gid ? s.amount : 0);
+    if (newAmt > g.budget - spentExcl) return { error: `${g.name} only has $${g.budget - spentExcl} left.` };
     snapshot(`edit of ${team} sale`);
-    if (amount != null && Number(amount) > 0) s.amount = Number(amount);
-    if (group) s.group = group;
+    s.amount = newAmt;
+    s.group = gid;
   },
   editLastBid({ amount, group }) {
     const cur = state.auction.onBlock;
@@ -340,6 +348,7 @@ const actions = {
     if (group) top.group = group;
   },
   reopenTeam({ team }) {
+    if (state.auction.paused) return { error: "Draft is paused — resume first. (Price fixes via ✎ still work.)" };
     const s = state.auction.sales[team];
     if (!s) return { error: "Team is not sold." };
     snapshot(`reopen of ${team}`);
@@ -353,7 +362,10 @@ const actions = {
   undo() {
     const prev = undoStack.pop();
     if (!prev) return { error: "Nothing to undo." };
+    // Pause is LIVE state, not history — undoing a bid must never silently resume/re-pause the room.
+    const livePaused = state.auction.paused;
     state.auction = prev.auction;
+    state.auction.paused = livePaused;
     state.trades = prev.trades;
   },
   addTrade({ team, from, to, pct, cash, ts }) {

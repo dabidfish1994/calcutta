@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Avatar, membersOf } from "./avatars.jsx";
 
 const fmt$ = n => "$" + Math.round(n).toLocaleString();
 const logo = abbr => `https://a.espncdn.com/i/teamlogos/nfl/500/${abbr.toLowerCase()}.png`;
@@ -59,7 +60,14 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <span className="brand">🏈 Cardinal War Room</span>
+        <span className="brand">
+          🏈 Cardinal War Room
+          <span className="crew">
+            {membersOf(view.state.config.groups.find(g => g.id === view.state.config.ourGroupId)?.name).map(n => (
+              <Avatar key={n} name={n} title={n} size={22} mode="hero" />
+            ))}
+          </span>
+        </span>
         <PotBadge view={view} />
       </header>
       <main><Comp view={view} lines={lines} /></main>
@@ -207,11 +215,12 @@ export function detectTeams(text) {
 
 const CUE_RE = /\b(next|block|selling|up now|now up|moving on|here we go|switch)\b/i;
 
-function SpeechPanel({ onFinal }) {
+function SpeechPanel({ onFinal, autoStart = false }) {
   const [listening, setListening] = useState(false);
   const [line, setLine] = useState("");
   const [supported] = useState(() => !!(window.SpeechRecognition || window.webkitSpeechRecognition));
   const recRef = useRef(null);
+  const triedAuto = useRef(false);
 
   const stop = () => { setListening(false); const r = recRef.current; recRef.current = null; try { r?.stop(); } catch {} };
   const start = () => {
@@ -236,11 +245,22 @@ function SpeechPanel({ onFinal }) {
     setListening(true);
   };
   useEffect(() => () => stop(), []);
+  // The device that started the draft becomes the listener automatically (mic permission
+  // persists per origin, so no extra tap after the first session).
+  useEffect(() => {
+    if (autoStart && !listening && !triedAuto.current && localStorage.getItem("cc-listen") === "1") {
+      triedAuto.current = true;
+      try { start(); } catch {}
+    }
+  }, [autoStart]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!supported) return <p className="dim">Speech recognition needs Chrome or Safari.</p>;
   return (
     <div className="speech">
-      <button className={listening ? "on" : ""} onClick={() => (listening ? stop() : start())}>
+      <button className={listening ? "on" : ""} onClick={() => {
+        if (listening) { localStorage.setItem("cc-listen", "0"); stop(); }
+        else { localStorage.setItem("cc-listen", "1"); start(); }
+      }}>
         {listening ? "🎙 Listening…" : "🎙 Listen to the draft"}
       </button>
       {listening && <span className="dim transcript">{line || "…"}</span>}
@@ -293,6 +313,7 @@ function Draft({ view, lines }) {
   const dedupe = useRef({ amount: 0, ts: 0, sold: 0 });
 
   const team = auction.onBlock;
+  const paused = !!auction.paused;
   const suggestionRef = useRef(null);
   suggestionRef.current = suggestion;
   useEffect(() => {
@@ -307,8 +328,15 @@ function Draft({ view, lines }) {
     const t = setTimeout(() => setNotice(null), 5000);
     return () => clearTimeout(t);
   }, [notice]);
+  // Entering a pause voids any pending card and dedupe memory — a card that survives a
+  // 15-minute break must never resurface looking fresh.
+  useEffect(() => {
+    if (paused) {
+      setSuggestion(null);
+      dedupe.current = { amount: 0, ts: 0, sold: 0 };
+    }
+  }, [paused]);
 
-  const paused = !!auction.paused;
   const bidsOnTeam = auction.bids.filter(b => b.team === team);
   const top = bidsOnTeam.reduce((a, b) => (!a || b.amount >= a.amount ? b : a), null);
   useEffect(() => { setCustomAmt(null); }, [top?.amount]);
@@ -347,15 +375,36 @@ function Draft({ view, lines }) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: txt, amounts, group })
     }).catch(() => {});
-    if (liveRef.current.paused) return; // paused: keep transcribing, suggest nothing
+    if (liveRef.current.paused) {
+      // Mic lines: keep transcribing silently. Typed lines are explicit commands — tell the operator why nothing happened.
+      if (manual) flash({ text: "⏸ Paused — resume the draft to log that." });
+      return;
+    }
     const now = Date.now();
     const unsold = det.teams.filter(t => !sales[t]);
     const ambiguousUnsold = det.ambiguous.map(pair => pair.filter(t => !sales[t])).filter(p => p.length);
 
-    // 1) "sold" closes the current team — and may name the next team in the same breath
+    // 1) "sold" closes the current team — and may name the next team in the same breath.
+    // Confident calls (a clean "sold!", "going twice sold", or a typed line) lock in
+    // immediately with an undo pill; murky ones still get a confirm card.
     if (curTeam && /\bsold\b/i.test(txt) && (manual || now - dedupe.current.sold > 6000)) {
       const next = unsold.filter(t => t !== curTeam);
-      setSuggestion({ kind: "sold", team: curTeam, heard: txt, next: next.length === 1 ? next[0] : null });
+      const nextOne = next.length === 1 ? next[0] : null;
+      const short = txt.trim().split(/\s+/).length <= 4;
+      const confident = curTop && (manual || short || /\bgoing\b/i.test(txt));
+      if (confident) {
+        dedupe.current.sold = now;
+        act("sold", { team: curTeam }).then(r => {
+          surface(r);
+          if (!r?.error) {
+            const gname = liveRef.current.groups.find(g => g.id === curTop.group)?.name || "";
+            flash({ text: `🔨 ${moji(curTeam)} ${curTeam} sold ${fmt$(curTop.amount)} · ${shortName(gname)}`, undo: () => act("undo").then(surface) });
+            if (nextOne) act("blockTeam", { team: nextOne }).then(surface);
+          }
+        });
+      } else {
+        setSuggestion({ kind: "sold", team: curTeam, heard: txt, next: nextOne });
+      }
       return;
     }
 
@@ -365,9 +414,16 @@ function Draft({ view, lines }) {
       const tokCount = txt.trim().split(/\s+/).length;
       const confident = unsold.length === 1 && !ambiguousUnsold.length && (manual || CUE_RE.test(txt) || tokCount <= 5);
       if (confident) {
-        act("blockTeam", { team: unsold[0] }).then(surface);
-        flash({ text: `${moji(unsold[0])} Heard it — ${unsold[0]} on the block`, undo: () => act("clearBlock") });
-        if (amounts.length) setSuggestion({ kind: "bid", team: unsold[0], amount: Math.max(...amounts), group, heard: txt });
+        const blocked = unsold[0];
+        act("blockTeam", { team: blocked }).then(r => {
+          surface(r);
+          // "Broncos — Joon opens at fifty": price + speaker heard, lock the opening bid too.
+          if (!r?.error && amounts.length && group) {
+            act("logBid", { team: blocked, group, amount: Math.max(...amounts) }).then(surface);
+          }
+        });
+        flash({ text: `${moji(blocked)} Heard it — ${blocked} on the block`, undo: () => act("clearBlock") });
+        if (amounts.length && !group) setSuggestion({ kind: "bid", team: blocked, amount: Math.max(...amounts), group: null, heard: txt });
         return;
       }
       const cands = [...new Set([...unsold, ...ambiguousUnsold.flat()])];
@@ -388,11 +444,23 @@ function Draft({ view, lines }) {
       return;
     }
 
-    // 3) plain bid amounts on the current team
+    // 3) bid amounts on the current team. Price + identified speaker = lock it in with an
+    // undo pill; unknown speaker still asks who said it.
     if (curTeam && amounts.length) {
       const amount = Math.max(...amounts);
       if (!manual && amount === dedupe.current.amount && now - dedupe.current.ts < 8000) return;
-      setSuggestion({ kind: "bid", team: curTeam, amount, group, heard: txt });
+      if (group) {
+        dedupe.current = { ...dedupe.current, amount, ts: now };
+        act("logBid", { team: curTeam, group, amount }).then(r => {
+          surface(r);
+          if (!r?.error) {
+            const gname = liveRef.current.groups.find(g => g.id === group)?.name || "";
+            flash({ text: `🔊 ${fmt$(amount)} · ${shortName(gname)} — locked in`, undo: () => act("undo").then(surface) });
+          }
+        });
+      } else {
+        setSuggestion({ kind: "bid", team: curTeam, amount, group, heard: txt });
+      }
     }
   };
 
@@ -400,8 +468,8 @@ function Draft({ view, lines }) {
     return (
       <div className="pad">
         <h2>Draft night</h2>
-        <p>No order needed — once you start, the app <b>listens for whichever team the auctioneer calls</b> and puts it on the block itself. You just confirm bids as it hears them. Set groups + aliases in <b>Setup</b> first.</p>
-        <button className="big go" onClick={() => act("startAuction")}>🏈 Start draft</button>
+        <p>No order needed — hit start and <b>this device begins listening immediately</b>. Teams it hears go on the block, bids with a recognized voice lock in automatically (undo pill if it's wrong), and it only asks when it genuinely can't tell who spoke. Set groups + aliases in <b>Setup</b> first.</p>
+        <button className="big go" onClick={() => { localStorage.setItem("cc-listen", "1"); act("startAuction"); }}>🏈 Start draft &amp; listen</button>
         {!valuation && <p className="dim">Valuations are computing from the live schedule + win totals…</p>}
         <BestRemaining view={view} title="Value board" />
       </div>
@@ -426,7 +494,7 @@ function Draft({ view, lines }) {
   return (
     <div className="pad draft">
       {paused && (
-        <div className="pausebanner">⏸ Draft paused — bids and sales are locked on every device until someone resumes.</div>
+        <div className="pausebanner">⏸ Draft paused — bidding and sales are locked on every device. Undo and Board price fixes (✎) still work.</div>
       )}
       <div className="draftgrid">
       <div className="draftmain">
@@ -485,7 +553,7 @@ function Draft({ view, lines }) {
         </div>
       )}
 
-      <SpeechPanel onFinal={handleFinal} />
+      <SpeechPanel onFinal={handleFinal} autoStart={auction.phase === "live"} />
       <ManualLine onFinal={txt => handleFinal(txt, { manual: true })} />
 
       {notice && (
@@ -520,7 +588,7 @@ function Draft({ view, lines }) {
           <div className="groupbtns">
             {suggestion.group && (
               <button className="go"
-                disabled={summaries[suggestion.group].remaining < suggestion.amount}
+                disabled={!summaries[suggestion.group] || summaries[suggestion.group].remaining < suggestion.amount}
                 onClick={() => confirmBid(suggestion.team, suggestion.group, suggestion.amount)}>
                 ✓ Confirm {fmt$(suggestion.amount)} · {memberNames(groupName(config, suggestion.group))}
               </button>
@@ -630,6 +698,11 @@ function GroupsPanel({ view }) {
         const ours = g.id === state.config.ourGroupId;
         return (
           <div key={g.id} className={"gcard" + (ours ? " ours" : "")}>
+            <div className="gavatars">
+              {membersOf(g.name).map(n => (
+                <Avatar key={n} name={n} title={n} size={ours ? 32 : 20} mode={ours ? "hero" : "weak"} />
+              ))}
+            </div>
             <div className="gname">{memberNames(g.name)}</div>
             {owned.map(([t, x]) => (
               <div key={t} className="gteam">
@@ -677,14 +750,17 @@ function BestRemaining({ view, title }) {
     <div className="upnext">
       <h3>{title}</h3>
       <div className="strip">
-        {remaining.map(t => (
-          // Tap-to-block only while the block is empty — a stray tap mid-bidding must not hijack the auction.
-          <div key={t} className={"mini" + (state.auction.phase === "live" && !onBlock ? " clickable" : "")}
-            onClick={() => state.auction.phase === "live" && !onBlock && act("blockTeam", { team: t })}>
-            <img src={logo(t)} alt="" /><span>{moji(t)} {t}</span><em>{fmt$(repricing.fair[t] || 0)}</em>
-            {skipped.includes(t) && <em className="amber">skipped</em>}
-          </div>
-        ))}
+        {remaining.map(t => {
+          // Tap-to-block only while the block is empty and the draft isn't paused.
+          const canBlock = state.auction.phase === "live" && !onBlock && !state.auction.paused;
+          return (
+            <div key={t} className={"mini" + (canBlock ? " clickable" : "")}
+              onClick={() => canBlock && act("blockTeam", { team: t }).then(r => { if (r?.error) alert(r.error); })}>
+              <img src={logo(t)} alt="" /><span>{moji(t)} {t}</span><em>{fmt$(repricing.fair[t] || 0)}</em>
+              {skipped.includes(t) && <em className="amber">skipped</em>}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -763,7 +839,7 @@ function Board({ view }) {
                     ) : (
                       <span className="row" style={{ gap: ".4rem" }}>
                         <span className="dim">—</span>
-                        {phase === "live" && <button className="tiny" title="Put on the block now" onClick={() => act("blockTeam", { team: r.t })}>▶ block</button>}
+                        {phase === "live" && <button className="tiny" title="Put on the block now" onClick={() => act("blockTeam", { team: r.t }).then(res => { if (res?.error) alert(res.error); })}>▶ block</button>}
                       </span>
                     )}
                   </td>
