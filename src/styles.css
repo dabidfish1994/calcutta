@@ -155,6 +155,18 @@ details[open].upnext summary::before { content: "▾ "; }
 .soldline b { font-variant-numeric: tabular-nums; }
 .soldline em { font-style: normal; font-size: .8rem; }
 
+/* odds tab */
+.tablewrap { overflow-x: auto; }
+.tablewrap .tbl { min-width: 40rem; }
+.subodds { font-size: .68rem; color: var(--dim); font-variant-numeric: tabular-nums; }
+.matchchip {
+  flex: 0 0 auto; display: flex; align-items: center; gap: .35rem;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: .4rem .6rem; font-size: .8rem;
+}
+.matchchip img { width: 26px; height: 26px; }
+.matchchip em { font-style: normal; color: var(--dim); font-variant-numeric: tabular-nums; margin-left: .15rem; }
+
 /* tables */
 .statline { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: .5rem; }
 .tbl { width: 100%; border-collapse: collapse; font-size: .88rem; }

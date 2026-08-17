@@ -5,6 +5,7 @@
 // results (standard Elo, k=25) and only the remaining games are simulated — that is the
 // mid-season repricing. Everything derives from two inputs: the schedule cache and win totals.
 import { TEAMS, TEAM_IDS, PAYOUT } from "./teams.js";
+import { blendMarket } from "./market.js";
 
 const HFA = 40; // home-field advantage in Elo points (~55.7% for even teams)
 const ELO_K = 25;
@@ -76,15 +77,17 @@ function seedConference(conf, wins, ratings) {
   return [...divWinners, ...rest.slice(0, 3)]; // seeds 1-7
 }
 
-function simPlayoffs(seeds, ratings, tally) {
+function simPlayoffs(seeds, ratings, tally, rec) {
   // seeds: array of 7, index 0 = 1-seed. Returns conference champion.
   for (const t of seeds) tally[t].berth++;
   tally[seeds[0]].oneSeed++;
+  for (const t of seeds.slice(0, 4)) tally[t].divTitle++;
   const wc = [
     [seeds[1], seeds[6]],
     [seeds[2], seeds[5]],
     [seeds[3], seeds[4]]
   ].map(([hi, lo]) => {
+    rec("wc", hi, lo);
     const w = simGame(ratings, hi, lo, false);
     tally[w].wcWin++;
     return w;
@@ -94,11 +97,13 @@ function simPlayoffs(seeds, ratings, tally) {
     [remaining[0], remaining[3]],
     [remaining[1], remaining[2]]
   ].map(([hi, lo]) => {
+    rec("div", hi, lo);
     const w = simGame(ratings, hi, lo, false);
     tally[w].divWin++;
     return w;
   });
   const [a, b] = divWinners.sort((x, y) => seeds.indexOf(x) - seeds.indexOf(y));
+  rec("conf", a, b);
   const champ = simGame(ratings, a, b, false);
   tally[champ].confWin++;
   return champ;
@@ -107,9 +112,14 @@ function simPlayoffs(seeds, ratings, tally) {
 // Simulate the season nSims times. actualWins/playedGames reflect what already happened;
 // futureGames are simulated. Returns per-team probabilities, expected wins, and pot shares.
 export function simulate({ ratings, futureGames, actualWins = null, nSims = 10000 }) {
-  const base = () => ({ wins: 0, berth: 0, oneSeed: 0, wcWin: 0, divWin: 0, confWin: 0, sbWin: 0 });
+  const base = () => ({ wins: 0, berth: 0, oneSeed: 0, divTitle: 0, wcWin: 0, divWin: 0, confWin: 0, sbWin: 0 });
   const tally = Object.fromEntries(TEAM_IDS.map(t => [t, base()]));
   const shareSamples = Object.fromEntries(TEAM_IDS.map(t => [t, []]));
+  const matchCounts = new Map();
+  const rec = (round, hi, lo) => {
+    const key = `${round}:${lo}@${hi}`;
+    matchCounts.set(key, (matchCounts.get(key) || 0) + 1);
+  };
 
   for (let s = 0; s < nSims; s++) {
     const wins = Object.fromEntries(TEAM_IDS.map(t => [t, actualWins ? actualWins[t] : 0]));
@@ -117,15 +127,16 @@ export function simulate({ ratings, futureGames, actualWins = null, nSims = 1000
     for (const g of futureGames) wins[simGame(ratings, g.home, g.away, g.neutral)]++;
     const afc = seedConference("AFC", wins, ratings);
     const nfc = seedConference("NFC", wins, ratings);
-    const champA = simPlayoffs(afc, ratings, simTally);
-    const champN = simPlayoffs(nfc, ratings, simTally);
+    const champA = simPlayoffs(afc, ratings, simTally, rec);
+    const champN = simPlayoffs(nfc, ratings, simTally, rec);
+    rec("sb", ...[champA, champN].sort());
     const sb = simGame(ratings, champA, champN, true);
     simTally[sb].sbWin++;
 
     for (const t of TEAM_IDS) {
       const st = simTally[t];
       tally[t].wins += wins[t];
-      for (const k of ["berth", "oneSeed", "wcWin", "divWin", "confWin", "sbWin"]) tally[t][k] += st[k];
+      for (const k of ["berth", "oneSeed", "divTitle", "wcWin", "divWin", "confWin", "sbWin"]) tally[t][k] += st[k];
       const share =
         PAYOUT.regWin * wins[t] + PAYOUT.playoffBerth * st.berth + PAYOUT.oneSeed * st.oneSeed +
         PAYOUT.wcWin * st.wcWin + PAYOUT.divWin * st.divWin +
@@ -142,6 +153,7 @@ export function simulate({ ratings, futureGames, actualWins = null, nSims = 1000
       expWins: tally[t].wins / nSims,
       pPlayoffs: tally[t].berth / nSims,
       pOneSeed: tally[t].oneSeed / nSims,
+      pDivTitle: tally[t].divTitle / nSims,
       pWcWin: tally[t].wcWin / nSims,
       pDivWin: tally[t].divWin / nSims,
       pConfWin: tally[t].confWin / nSims,
@@ -151,12 +163,23 @@ export function simulate({ ratings, futureGames, actualWins = null, nSims = 1000
       shareP90: samples[Math.floor(nSims * 0.9)]
     };
   }
-  return out;
+  const matchups = {};
+  for (const round of ["wc", "div", "conf", "sb"]) {
+    matchups[round] = [...matchCounts.entries()]
+      .filter(([k]) => k.startsWith(round + ":"))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([k, n]) => {
+        const [away, home] = k.slice(round.length + 1).split("@");
+        return { away, home, p: n / nSims };
+      });
+  }
+  return { teams: out, matchups };
 }
 
 // Full pipeline from raw inputs. Played games feed both Elo updates and banked wins;
 // remaining games get simulated. Preseason this is simply the whole schedule.
-export function valuate(scheduleGames, winTotals, nSims = 10000) {
+export function valuate(scheduleGames, winTotals, nSims = 10000, marketOdds = null) {
   const regular = scheduleGames.filter(g => g.seasontype === 2);
   const played = regular.filter(g => g.final && g.homeScore != null);
   const future = regular.filter(g => !g.final);
@@ -168,6 +191,14 @@ export function valuate(scheduleGames, winTotals, nSims = 10000) {
     else if (g.awayScore > g.homeScore) actualWins[g.away]++;
     else { actualWins[g.home] += 0.5; actualWins[g.away] += 0.5; }
   }
-  const teams = simulate({ ratings, futureGames: future, actualWins, nSims });
-  return { computedAt: new Date().toISOString(), gamesPlayed: played.length, ratings, teams };
+  const sim = simulate({ ratings, futureGames: future, actualWins, nSims });
+  let teams = sim.teams;
+  let marketWeight = 0;
+  if (marketOdds) {
+    for (const t of TEAM_IDS) if (marketOdds[t]) marketOdds[t].winTotal = winTotals[t];
+    const blended = blendMarket(sim.teams, marketOdds, played.length);
+    teams = blended.teams;
+    marketWeight = blended.marketWeight;
+  }
+  return { computedAt: new Date().toISOString(), gamesPlayed: played.length, ratings, teams, matchups: sim.matchups, marketWeight };
 }

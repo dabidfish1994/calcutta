@@ -44,8 +44,8 @@ function useLive(onTranscript) {
   return view;
 }
 
-const TABS = ["Draft", "Board", "Season", "Trades", "Setup"];
-const TAB_MOJI = { Draft: "🔨", Board: "📋", Season: "🏈", Trades: "🤝", Setup: "⚙️" };
+const TABS = ["Draft", "Board", "Odds", "Season", "Trades", "Setup"];
+const TAB_MOJI = { Draft: "🔨", Board: "📋", Odds: "🎲", Season: "🏈", Trades: "🤝", Setup: "⚙️" };
 
 export default function App() {
   const [tab, setTab] = useState("Draft");
@@ -55,7 +55,7 @@ export default function App() {
     fetch("/api/transcript").then(r => r.json()).then(d => setLines(d.lines || [])).catch(() => {});
   }, []);
   if (!view) return <div className="loading">🏈 Connecting to the war room…</div>;
-  const Comp = { Draft, Board, Season, Trades, Setup }[tab];
+  const Comp = { Draft, Board, Odds, Season, Trades, Setup }[tab];
   return (
     <div className="app">
       <header className="topbar">
@@ -735,6 +735,79 @@ function Board({ view }) {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ---------------- ODDS (market lines + model + likely matchups) ----------------
+const american = o => (o == null ? "—" : o > 0 ? `+${o}` : `${o}`);
+const pct = p => `${Math.round(p * 100)}%`;
+const pct1 = p => `${(p * 100).toFixed(1)}%`;
+
+function Odds({ view }) {
+  const { teams, valuation, repricing } = view;
+  if (!valuation?.teams || !Object.values(valuation.teams)[0]?.market)
+    return <div className="pad"><p className="dim">Market blend still computing — refresh in a minute.</p></div>;
+  const rows = Object.keys(teams)
+    .map(t => ({ t, v: valuation.teams[t] }))
+    .filter(r => r.v)
+    .sort((a, b) => b.v.share - a.v.share);
+  const wPct = Math.round((valuation.marketWeight || 0) * 100);
+  const disagree = v => {
+    const dPl = Math.abs((v.market.pPlayoff ?? 0) - (v.sim.pPlayoff ?? 0));
+    const ratio = v.sim.pSb > 5e-3 ? v.market.pSb / v.sim.pSb : 1;
+    return dPl >= 0.12 || ratio >= 1.8 || ratio <= 0.55;
+  };
+  const ROUNDS = [["wc", "Wild Card"], ["div", "Divisional"], ["conf", "Conference Championships"], ["sb", "Super Bowl"]];
+  return (
+    <div className="pad">
+      <p className="dim">
+        Sportsbook futures (de-vigged) blended into the sim at <b>{wPct}% market weight</b> — the weight
+        decays automatically as real games are played. ⚡ = market and model disagree; that's where auction
+        edges live.
+      </p>
+      <div className="tablewrap"><table className="tbl">
+        <thead><tr>
+          <th>Team</th><th className="r">O/U</th><th className="r">E[W]</th>
+          <th className="r">Playoffs</th><th className="r">Division</th><th className="r">Super Bowl</th><th className="r">Fair</th>
+        </tr></thead>
+        <tbody>
+          {rows.map(({ t, v }) => (
+            <tr key={t}>
+              <td><img className="tinylogo" src={logo(t)} alt="" /> {moji(t)} {teams[t].name} {disagree(v) && <em className="amber" title={`market P(playoffs) ${pct(v.market.pPlayoff)} vs model ${pct(v.sim.pPlayoff)}; market P(SB) ${pct1(v.market.pSb)} vs model ${pct1(v.sim.pSb)}`}>⚡</em>}</td>
+              <td className="r">{v.market.winTotal ?? "—"}</td>
+              <td className="r">{v.expWins.toFixed(1)}</td>
+              <td className="r">{pct(v.pPlayoffs)}<div className="subodds">{american(v.market.playoffOdds)} · sim {pct(v.sim.pPlayoff)}</div></td>
+              <td className="r">{pct(v.pDivTitle)}<div className="subodds">{american(v.market.divisionOdds)}</div></td>
+              <td className="r">{pct1(v.pSbWin)}<div className="subodds">{american(v.market.sbOdds)} · sim {pct1(v.sim.pSb)}</div></td>
+              <td className="r"><b>{fmt$(repricing.fair[t] || 0)}</b></td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+
+      <h2>🔮 Most likely playoff matchups</h2>
+      <p className="dim">From {""}the simulated seasons — how often each pairing occurs (home team second, seeds decide home field).</p>
+      {ROUNDS.map(([key, label]) => (
+        <div key={key} className="upnext">
+          <h3>{label}</h3>
+          <div className="strip">
+            {(valuation.matchups?.[key] || []).map((m, i) => (
+              <div key={i} className="matchchip">
+                <img src={logo(m.away)} alt="" />
+                <span>{key === "sb" ? "vs" : "@"}</span>
+                <img src={logo(m.home)} alt="" />
+                <em>{Math.round(m.p * 100)}%</em>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      <p className="dim" style={{ marginTop: "1rem" }}>
+        Lines: consensus win totals (FOX/Yahoo), Super Bowl futures (ESPN, Aug 16), make-the-playoffs (Yahoo),
+        division winners (Jul 25). Edit <code>data/market-odds-2026.json</code> to refresh; the engine de-vigs
+        and re-blends on the next sync.
+      </p>
     </div>
   );
 }

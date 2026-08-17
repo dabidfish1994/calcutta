@@ -62,6 +62,19 @@ Every finalized speech line is saved to `data/transcripts/YYYY-MM-DD.jsonl` with
 detected amounts, guessed group, and the team on the block. The Transcript panel (Draft tab)
 shows it live on all devices — it's the audit trail for any disputed price.
 
+## Odds tab — market lines, blended in
+
+The Odds tab shows every team's sportsbook lines (win-total O/U, make-the-playoffs price,
+division-winner price, Super Bowl futures) next to the model's numbers, plus the most
+likely playoff matchups by round from the simulations. The lines aren't just displayed —
+they're **factored in**: the engine de-vigs each futures market against its structural
+total (SB sums to 100%, 7 berths per conference, 1 winner per division) and blends it
+into the sim at 70% market weight preseason, decaying to 0 as real games are played.
+Un-marketed rounds (conference/divisional/wild-card win rates) get tilted toward the SB
+adjustment and renormalized. ⚡ flags teams where market and model genuinely disagree —
+those are the auction edges. Lines live in `data/market-odds-2026.json`; edit and re-sync
+to refresh.
+
 ## Season mode
 
 Scores sync from ESPN automatically (boot + every 6h + manual button). Wins credit to

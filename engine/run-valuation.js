@@ -13,8 +13,10 @@ const sched = fs.existsSync(schedPath) && !process.argv.includes("--fresh")
   ? JSON.parse(fs.readFileSync(schedPath, "utf8"))
   : await fetchAndCache();
 const winTotals = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "win-totals-2026.json"), "utf8"));
+let marketOdds = null;
+try { marketOdds = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "market-odds-2026.json"), "utf8")); } catch {}
 
-const val = valuate(sched.games, winTotals, 20000);
+const val = valuate(sched.games, winTotals, 20000, marketOdds);
 fs.writeFileSync(path.join(DATA_DIR, "valuation.json"), JSON.stringify(val, null, 1));
 
 const rows = TEAM_IDS.map(t => ({ t, ...val.teams[t] })).sort((a, b) => b.share - a.share);

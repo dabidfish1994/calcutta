@@ -15,7 +15,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 // Seed a fresh DATA_DIR (e.g. an empty Railway volume) from the repo's data folder.
-for (const f of ["win-totals-2026.json"]) {
+for (const f of ["win-totals-2026.json", "market-odds-2026.json"]) {
   const src = path.join(ROOT, "data", f), dst = path.join(DATA_DIR, f);
   if (!fs.existsSync(dst) && fs.existsSync(src)) fs.copyFileSync(src, dst);
 }
@@ -166,7 +166,13 @@ function view() {
   return {
     state,
     teams: TEAMS,
-    valuation: valuation ? { computedAt: valuation.computedAt, gamesPlayed: valuation.gamesPlayed, teams: valuation.teams } : null,
+    valuation: valuation ? {
+      computedAt: valuation.computedAt,
+      gamesPlayed: valuation.gamesPlayed,
+      teams: valuation.teams,
+      matchups: valuation.matchups || null,
+      marketWeight: valuation.marketWeight ?? 0
+    } : null,
     repricing: rp,
     potForSettlement,
     events,
@@ -198,7 +204,9 @@ async function syncScores({ force = false } = {}) {
       revaluing = true;
       try {
         const winTotals = JSON.parse(fs.readFileSync(DATA("win-totals-2026.json"), "utf8"));
-        valuation = valuate(schedule.games, winTotals, 10000);
+        let marketOdds = null;
+        try { marketOdds = JSON.parse(fs.readFileSync(DATA("market-odds-2026.json"), "utf8")); } catch {}
+        valuation = valuate(schedule.games, winTotals, 10000, marketOdds);
         fs.writeFileSync(DATA("valuation.json"), JSON.stringify(valuation, null, 1));
       } finally {
         revaluing = false;
