@@ -1,0 +1,8 @@
+node_modules/
+dist/
+data/state.json
+data/transcripts/
+data/valuation.json
+data/schedule-2026.json
+Cardinal-Calcutta-Rules.pdf
+.DS_Store
