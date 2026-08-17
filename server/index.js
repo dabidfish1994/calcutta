@@ -8,7 +8,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { TEAMS, TEAM_IDS, PAYOUT } from "../engine/teams.js";
-import { valuate } from "../engine/sim.js";
+import { valuate, VALUATION_VERSION } from "../engine/sim.js";
 import { fetchAndCache } from "../engine/fetch-schedule.js";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -200,7 +200,8 @@ async function syncScores({ force = false } = {}) {
     const before = schedule ? schedule.games.filter(g => g.final).length : -1;
     schedule = await fetchAndCache();
     const after = schedule.games.filter(g => g.final).length;
-    if ((after !== before || force || !valuation) && !revaluing) {
+    const stale = !valuation || valuation.version !== VALUATION_VERSION;
+    if ((after !== before || force || stale) && !revaluing) {
       revaluing = true;
       try {
         const winTotals = JSON.parse(fs.readFileSync(DATA("win-totals-2026.json"), "utf8"));

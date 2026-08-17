@@ -10,6 +10,9 @@ import { blendMarket } from "./market.js";
 const HFA = 40; // home-field advantage in Elo points (~55.7% for even teams)
 const ELO_K = 25;
 
+// Bump when the valuation schema/logic changes so cached valuation.json files recompute on deploy.
+export const VALUATION_VERSION = 2;
+
 export function winProb(rA, rB, hfaA) {
   return 1 / (1 + Math.pow(10, -((rA + hfaA - rB) / 400)));
 }
@@ -200,5 +203,5 @@ export function valuate(scheduleGames, winTotals, nSims = 10000, marketOdds = nu
     teams = blended.teams;
     marketWeight = blended.marketWeight;
   }
-  return { computedAt: new Date().toISOString(), gamesPlayed: played.length, ratings, teams, matchups: sim.matchups, marketWeight };
+  return { version: VALUATION_VERSION, computedAt: new Date().toISOString(), gamesPlayed: played.length, ratings, teams, matchups: sim.matchups, marketWeight };
 }
