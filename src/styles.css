@@ -47,6 +47,57 @@ input, select, textarea {
 .potbadge .warm { color: var(--amber); }
 
 main { flex: 1; padding-bottom: 4.5rem; }
+/* compound selector: must beat .pad's shorthand regardless of rule order */
+.pad.draft { padding-bottom: 9rem; }
+
+/* two-column draft: console left, groups roster right */
+.draftmain { min-width: 0; }
+.gpanel { display: flex; flex-direction: column; gap: .6rem; margin-top: 1rem; }
+.gcard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .55rem .75rem; font-size: .84rem; }
+.gcard.ours { border-color: var(--cardinal); background: #241413; }
+.gname { font-weight: 700; margin-bottom: .3rem; }
+.gteam { display: flex; justify-content: space-between; align-items: center; padding: .18rem 0; border-bottom: 1px solid var(--line); }
+.gteam b { font-variant-numeric: tabular-nums; }
+.gtotal { display: flex; justify-content: space-between; margin-top: .35rem; font-size: .8rem; }
+.gtotal b { font-variant-numeric: tabular-nums; }
+@media (min-width: 1000px) {
+  .draftgrid { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: 1.2rem; align-items: start; }
+  .gpanel { margin-top: 0; position: sticky; top: 3.4rem; max-height: calc(100vh - 10rem); overflow-y: auto; }
+}
+
+/* always-visible action bar */
+.stickybar {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(3.35rem + env(safe-area-inset-bottom));
+  display: flex; gap: .45rem; align-items: stretch;
+  max-width: 60rem; margin: 0 auto; padding: .55rem .9rem .45rem;
+  background: linear-gradient(to top, var(--bg) 75%, transparent);
+  z-index: 4;
+}
+.stickybar button {
+  flex: 1; min-width: 0; padding: .8rem .4rem; font-size: .95rem; border-radius: 10px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.stickybar .sold {
+  flex: 2.2; background: var(--cardinal); border-color: var(--cardinal);
+  font-weight: 800; font-size: 1.2rem;
+}
+.stickybar .warn { border-color: var(--amber); color: var(--amber); }
+.stickybar .go { background: var(--green); border-color: var(--green); color: #10241a; font-weight: 700; }
+
+@media (max-width: 700px) {
+  .stickybar .lbl { display: none; }
+  .stickybar button:not(.sold) { flex: 0 0 auto; padding: .8rem .7rem; }
+  .stickybar .sold { flex: 1; font-size: 1.05rem; }
+}
+
+.pausebanner {
+  background: #2e2410; border: 1px solid var(--amber); color: var(--amber);
+  border-radius: 10px; padding: .7rem 1rem; margin-bottom: .8rem;
+  font-weight: 700; text-align: center;
+}
+
+.groupbtns.members button { font-size: .78rem; line-height: 1.25; white-space: normal; max-width: 12rem; }
 .pad { padding: .9rem; max-width: 60rem; margin: 0 auto; }
 .row { display: flex; align-items: center; }
 .gap { gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }

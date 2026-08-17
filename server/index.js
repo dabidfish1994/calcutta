@@ -37,7 +37,7 @@ const DEFAULT_STATE = {
     priorPot: 40000,
     targetMargin: 0.85
   },
-  auction: { phase: "setup", onBlock: null, bids: [], sales: {}, skipped: [] },
+  auction: { phase: "setup", onBlock: null, paused: false, bids: [], sales: {}, skipped: [] },
   trades: []
 };
 
@@ -54,6 +54,7 @@ state.auction.skipped ??= [];
 state.auction.bids ??= [];
 state.auction.sales ??= {};
 state.auction.origSaleTs ??= {};
+state.auction.paused ??= false;
 let undoStack = [];
 
 let schedule = fs.existsSync(DATA("schedule-2026.json"))
@@ -254,8 +255,13 @@ const actions = {
     snapshot("draft start");
     state.auction.phase = "live";
     state.auction.onBlock = null;
+    state.auction.paused = false;
+  },
+  setPaused({ paused }) {
+    state.auction.paused = !!paused;
   },
   blockTeam({ team }) {
+    if (state.auction.paused) return { error: "Draft is paused — resume first." };
     if (!TEAM_IDS.includes(team)) return { error: "Unknown team." };
     if (state.auction.sales[team]) return { error: "Already sold — reopen it instead." };
     snapshot(`${team} on the block`);
@@ -272,6 +278,7 @@ const actions = {
     state.auction.onBlock = null;
   },
   logBid({ team, group, amount }) {
+    if (state.auction.paused) return { error: "Draft is paused — resume first." };
     const cur = state.auction.onBlock;
     if (!cur) return { error: "No team on the block." };
     if (team && team !== cur) return { error: `Block changed to ${cur} — bid not logged.` };
@@ -287,6 +294,7 @@ const actions = {
     state.auction.bids.push({ team: cur, group: g.id, amount: amt, ts: new Date().toISOString() });
   },
   sold({ team, group, amount }) {
+    if (state.auction.paused) return { error: "Draft is paused — resume first." };
     const cur = state.auction.onBlock;
     if (!cur) return { error: "No team on the block." };
     if (team && team !== cur) return { error: `Block changed to ${cur} — sale not recorded.` };
@@ -305,6 +313,7 @@ const actions = {
     if (Object.keys(state.auction.sales).length >= TEAM_IDS.length) state.auction.phase = "done";
   },
   skipTeam() {
+    if (state.auction.paused) return { error: "Draft is paused — resume first." };
     const team = state.auction.onBlock;
     if (!team) return { error: "No team on the block." };
     snapshot(`skip of ${team}`);

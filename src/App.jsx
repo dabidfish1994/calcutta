@@ -80,6 +80,7 @@ function PotBadge({ view }) {
   const heatCls = heat > 1.08 ? "hot" : heat < 0.92 ? "cold" : "warm";
   return (
     <span className="potbadge">
+      {state.auction.paused && <em className="warm">⏸ paused</em>}
       pot est <b>{fmt$(repricing.potEstimate)}</b>
       {state.auction.phase === "live" && repricing.soldShare > 0 && (
         <em className={heatCls}>{heat > 1.08 ? "🔥" : heat < 0.92 ? "🧊" : ""}{heat > 1 ? "+" : ""}{Math.round((heat - 1) * 100)}% {heat >= 1 ? "hot" : "cold"}</em>
@@ -307,11 +308,12 @@ function Draft({ view, lines }) {
     return () => clearTimeout(t);
   }, [notice]);
 
+  const paused = !!auction.paused;
   const bidsOnTeam = auction.bids.filter(b => b.team === team);
   const top = bidsOnTeam.reduce((a, b) => (!a || b.amount >= a.amount ? b : a), null);
   useEffect(() => { setCustomAmt(null); }, [top?.amount]);
   const liveRef = useRef({});
-  liveRef.current = { team, top, sales: auction.sales, groups: config.groups };
+  liveRef.current = { team, top, sales: auction.sales, groups: config.groups, paused };
 
   const flash = msg => setNotice(msg);
   const surface = r => { if (r?.error) flash({ text: `⚠️ ${r.error}` }); };
@@ -345,6 +347,7 @@ function Draft({ view, lines }) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: txt, amounts, group })
     }).catch(() => {});
+    if (liveRef.current.paused) return; // paused: keep transcribing, suggest nothing
     const now = Date.now();
     const unsold = det.teams.filter(t => !sales[t]);
     const ambiguousUnsold = det.ambiguous.map(pair => pair.filter(t => !sales[t])).filter(p => p.length);
@@ -422,12 +425,17 @@ function Draft({ view, lines }) {
 
   return (
     <div className="pad draft">
+      {paused && (
+        <div className="pausebanner">⏸ Draft paused — bids and sales are locked on every device until someone resumes.</div>
+      )}
+      <div className="draftgrid">
+      <div className="draftmain">
       <div className="budgets">
         {config.groups.map(g => {
           const s = summaries[g.id];
           const ours = g.id === config.ourGroupId;
           return (
-            <div key={g.id} className={"chip" + (ours ? " ours" : "")} title={g.name}>
+            <div key={g.id} className={"chip" + (ours ? " ours" : "")} title={memberNames(g.name)}>
               <span>{shortName(g.name)}</span><b>{fmt$(s.remaining)}</b>
             </div>
           );
@@ -487,7 +495,7 @@ function Draft({ view, lines }) {
         </div>
       )}
 
-      {suggestion?.kind === "team" && (
+      {!paused && suggestion?.kind === "team" && (
         <div className="suggest">
           <div className="suggesthead">
             Heard a team{team ? " (switch?)" : ""} — which one?
@@ -503,7 +511,7 @@ function Draft({ view, lines }) {
           </div>
         </div>
       )}
-      {suggestion?.kind === "bid" && suggestion.team === team && (
+      {!paused && suggestion?.kind === "bid" && suggestion.team === team && (
         <div className="suggest">
           <div className="suggesthead">
             Heard <b>{fmt$(suggestion.amount)}</b>{suggestion.group ? <> from <b>{shortName(groupName(config, suggestion.group))}</b></> : " — who said it?"}
@@ -514,21 +522,21 @@ function Draft({ view, lines }) {
               <button className="go"
                 disabled={summaries[suggestion.group].remaining < suggestion.amount}
                 onClick={() => confirmBid(suggestion.team, suggestion.group, suggestion.amount)}>
-                ✓ Confirm {fmt$(suggestion.amount)} · {shortName(groupName(config, suggestion.group))}
+                ✓ Confirm {fmt$(suggestion.amount)} · {memberNames(groupName(config, suggestion.group))}
               </button>
             )}
             {config.groups.filter(g => g.id !== suggestion.group).map(g => (
               <button key={g.id} className={g.id === config.ourGroupId ? "ours" : ""}
                 disabled={summaries[g.id].remaining < suggestion.amount}
                 onClick={() => confirmBid(suggestion.team, g.id, suggestion.amount)}>
-                {shortName(g.name)}
+                {memberNames(g.name)}
               </button>
             ))}
             <button onClick={() => setSuggestion(null)}>✕</button>
           </div>
         </div>
       )}
-      {suggestion?.kind === "sold" && suggestion.team === team && (
+      {!paused && suggestion?.kind === "sold" && suggestion.team === team && (
         <div className="suggest">
           <div className="suggesthead">
             Heard <b>SOLD</b> — confirm {top ? `${fmt$(top.amount)} to ${shortName(groupName(config, top.group))}` : "(no bid logged yet)"}?
@@ -542,47 +550,54 @@ function Draft({ view, lines }) {
         </div>
       )}
 
-      {team && (
-        <>
-          <div className="bidrow">
-            <div className="stepper">
-              <button onClick={() => setCustomAmt(Math.max(50, bidAmt - (bidAmt <= 500 ? 25 : 50)))}>−</button>
-              <span onClick={() => {
-                const amt = window.prompt("Bid amount:", bidAmt);
-                if (amt && Number(amt) > 0) setCustomAmt(Number(amt));
-              }}>{fmt$(bidAmt)}</span>
-              <button onClick={() => setCustomAmt(bidAmt + (bidAmt < 500 ? 25 : 50))}>+</button>
-            </div>
-            <div className="groupbtns">
-              {config.groups.map(g => (
-                <button
-                  key={g.id}
-                  disabled={summaries[g.id].remaining < bidAmt || bidAmt <= (top?.amount || 0)}
-                  className={g.id === config.ourGroupId ? "ours" : ""}
-                  onClick={() => confirmBid(team, g.id, bidAmt)}
-                >
-                  {shortName(g.name)}
-                </button>
-              ))}
-            </div>
+      {team && !paused && (
+        <div className="bidrow">
+          <div className="stepper">
+            <button onClick={() => setCustomAmt(Math.max(50, bidAmt - (bidAmt <= 500 ? 25 : 50)))}>−</button>
+            <span onClick={() => {
+              const amt = window.prompt("Bid amount:", bidAmt);
+              if (amt && Number(amt) > 0) setCustomAmt(Number(amt));
+            }}>{fmt$(bidAmt)}</span>
+            <button onClick={() => setCustomAmt(bidAmt + (bidAmt < 500 ? 25 : 50))}>+</button>
           </div>
-          <div className="row gap actions">
-            <button className="big go" disabled={!top} onClick={() => confirmSold(team)}>
-              🔨 SOLD {top ? `· ${fmt$(top.amount)}` : ""}
-            </button>
-            <button className="big" disabled={!view.undoLabel} title={view.undoLabel ? `Undo ${view.undoLabel}` : "Nothing to undo"}
-              onClick={() => act("undo").then(surface)}>
-              ↩︎ {view.undoLabel ? `Undo ${view.undoLabel}` : "Undo"}
-            </button>
-            <button className="big warn" onClick={() => { if (confirm("Skip this team (no sale)?")) act("skipTeam").then(surface); }}>Skip</button>
+          <div className="groupbtns members">
+            {config.groups.map(g => (
+              <button
+                key={g.id}
+                disabled={summaries[g.id].remaining < bidAmt || bidAmt <= (top?.amount || 0)}
+                className={g.id === config.ourGroupId ? "ours" : ""}
+                onClick={() => confirmBid(team, g.id, bidAmt)}
+              >
+                {memberNames(g.name)}
+              </button>
+            ))}
           </div>
-        </>
+        </div>
       )}
 
-      {!team && <QuickPick view={view} />}
+      {!team && !paused && <QuickPick view={view} />}
       <BestRemaining view={view} title="Best remaining" />
       <SoldTicker view={view} />
       <TranscriptLog lines={lines} />
+      </div>
+      <GroupsPanel view={view} />
+      </div>
+
+      <div className="stickybar">
+        <button className="sold" disabled={!team || !top || paused} onClick={() => confirmSold(team)}>
+          🔨 SOLD {top ? `· ${fmt$(top.amount)}` : ""}
+        </button>
+        <button disabled={!view.undoLabel} title={view.undoLabel ? `Undo ${view.undoLabel}` : "Nothing to undo"}
+          onClick={() => act("undo").then(surface)}>
+          ↩︎<span className="lbl"> {view.undoLabel ? `Undo ${view.undoLabel}` : "Undo"}</span>
+        </button>
+        <button className="warn" disabled={!team || paused} title="Skip this team (no sale)"
+          onClick={() => { if (confirm("Skip this team (no sale)?")) act("skipTeam").then(surface); }}>Skip</button>
+        <button className={paused ? "go" : ""} title={paused ? "Resume the draft" : "Pause the draft on every device"}
+          onClick={() => act("setPaused", { paused: !paused }).then(surface)}>
+          {paused ? "▶" : "⏸"}<span className="lbl"> {paused ? "Resume" : "Pause"}</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -592,7 +607,47 @@ function shortName(name) {
   const first = name.split(/[\s(/]+/)[0];
   return first.length > 8 ? first.slice(0, 8) : first;
 }
+// "Us (Fish/Joon/Gunther)" -> "Fish · Joon · Gunther"; "Mark/Fuller" -> "Mark · Fuller"
+function memberNames(name) {
+  if (!name) return "?";
+  const m = name.match(/\(([^)]+)\)/);
+  const core = m ? m[1] : name;
+  const parts = core.split(/[/,+&]+/).map(s => s.trim()).filter(Boolean);
+  return parts.length > 1 ? parts.join(" · ") : name;
+}
 const groupName = (config, id) => config.groups.find(g => g.id === id)?.name || id;
+
+function GroupsPanel({ view }) {
+  const { state, summaries } = view;
+  const { sales } = state.auction;
+  return (
+    <div className="gpanel">
+      {state.config.groups.map(g => {
+        const s = summaries[g.id];
+        const owned = Object.entries(sales)
+          .filter(([, x]) => x.group === g.id)
+          .sort((a, b) => b[1].amount - a[1].amount);
+        const ours = g.id === state.config.ourGroupId;
+        return (
+          <div key={g.id} className={"gcard" + (ours ? " ours" : "")}>
+            <div className="gname">{memberNames(g.name)}</div>
+            {owned.map(([t, x]) => (
+              <div key={t} className="gteam">
+                <span><img className="tinylogo" src={logo(t)} alt="" /> {moji(t)} {t}</span>
+                <b>{fmt$(x.amount)}</b>
+              </div>
+            ))}
+            {!owned.length && <div className="gteam"><span className="dim">no teams yet</span></div>}
+            <div className="gtotal">
+              <span className="dim">spent <b>{fmt$(s.spent)}</b></span>
+              <b className={s.remaining < 500 ? "red" : "green"}>{fmt$(s.remaining)} left</b>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function QuickPick({ view }) {
   const { state, teams, repricing } = view;
