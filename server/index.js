@@ -12,7 +12,14 @@ import { valuate } from "../engine/sim.js";
 import { fetchAndCache } from "../engine/fetch-schedule.js";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DATA = p => path.join(ROOT, "data", p);
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, "data");
+fs.mkdirSync(DATA_DIR, { recursive: true });
+// Seed a fresh DATA_DIR (e.g. an empty Railway volume) from the repo's data folder.
+for (const f of ["win-totals-2026.json"]) {
+  const src = path.join(ROOT, "data", f), dst = path.join(DATA_DIR, f);
+  if (!fs.existsSync(dst) && fs.existsSync(src)) fs.copyFileSync(src, dst);
+}
+const DATA = p => path.join(DATA_DIR, p);
 const PORT = process.env.PORT || 4600;
 
 // ---------- persistent state ----------
@@ -30,13 +37,23 @@ const DEFAULT_STATE = {
     priorPot: 40000,
     targetMargin: 0.85
   },
-  auction: { phase: "setup", order: [], current: 0, bids: [], sales: {}, skipped: [] },
+  auction: { phase: "setup", onBlock: null, bids: [], sales: {}, skipped: [] },
   trades: []
 };
 
 let state = fs.existsSync(DATA("state.json"))
   ? JSON.parse(fs.readFileSync(DATA("state.json"), "utf8"))
   : structuredClone(DEFAULT_STATE);
+// Migrate pre-dynamic-draft state files (ordered pointer -> onBlock).
+if (!("onBlock" in state.auction)) {
+  state.auction.onBlock = state.auction.phase === "live" ? state.auction.order?.[state.auction.current] ?? null : null;
+  delete state.auction.order;
+  delete state.auction.current;
+}
+state.auction.skipped ??= [];
+state.auction.bids ??= [];
+state.auction.sales ??= {};
+state.auction.origSaleTs ??= {};
 let undoStack = [];
 
 let schedule = fs.existsSync(DATA("schedule-2026.json"))
@@ -144,7 +161,8 @@ function view() {
   const events = payoutEvents();
   const finalPot = rp.spent; // once auction done, actual pot = total sold
   const potForSettlement = state.auction.phase === "done" ? finalPot : rp.potEstimate;
-  const gs = groupSummaries(events, finalPot);
+  // Every dollar figure on screen derives from the SAME pot, or the tables disagree.
+  const gs = groupSummaries(events, potForSettlement);
   return {
     state,
     teams: TEAMS,
@@ -154,7 +172,8 @@ function view() {
     events,
     summaries: gs.groups,
     earnedByTeam: gs.earnedByTeam,
-    scheduleFetchedAt: schedule?.fetchedAt || null
+    scheduleFetchedAt: schedule?.fetchedAt || null,
+    undoLabel: undoStack.length ? undoStack[undoStack.length - 1].label ?? null : null
   };
 }
 
@@ -199,10 +218,16 @@ syncScores(); // on boot: fresh schedule + valuation, zero manual steps
 const MIN_OPEN = 50;
 const nextIncrement = amount => (amount < 500 ? 25 : 50);
 
-function snapshot() {
-  undoStack.push(structuredClone({ auction: state.auction, trades: state.trades }));
+function snapshot(label) {
+  undoStack.push({ label, ...structuredClone({ auction: state.auction, trades: state.trades }) });
   if (undoStack.length > 100) undoStack.shift();
 }
+
+const bidsFor = team => state.auction.bids.filter(b => b.team === team);
+// The top bid is the HIGHEST, not the last-appended — concurrent devices can log out of order.
+const topBidFor = team => bidsFor(team).reduce((a, b) => (!a || b.amount >= a.amount ? b : a), null);
+const groupById = id => state.config.groups.find(g => g.id === id);
+const groupSpent = id => Object.values(state.auction.sales).reduce((s, x) => s + (x.group === id ? x.amount : 0), 0);
 
 const actions = {
   setGroups({ groups }) {
@@ -216,95 +241,102 @@ const actions = {
   setOurGroup({ groupId }) { state.config.ourGroupId = groupId; },
   setPriorPot({ pot }) { state.config.priorPot = Math.max(1000, Number(pot) || 40000); },
   setTargetMargin({ margin }) { state.config.targetMargin = Math.min(1.5, Math.max(0.3, Number(margin) || 0.85)); },
-  setOrder({ order }) {
-    const valid = order.filter(t => TEAM_IDS.includes(t));
-    const missing = TEAM_IDS.filter(t => !valid.includes(t));
-    state.auction.order = [...valid, ...missing];
-  },
-  shuffleOrder() {
-    const arr = [...TEAM_IDS];
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    state.auction.order = arr;
-  },
   startAuction() {
-    if (!state.auction.order.length) actions.shuffleOrder();
+    snapshot("draft start");
     state.auction.phase = "live";
-    state.auction.current = 0;
+    state.auction.onBlock = null;
   },
-  logBid({ group, amount }) {
-    snapshot();
-    const team = state.auction.order[state.auction.current];
-    const bidsOnTeam = state.auction.bids.filter(b => b.team === team);
-    const top = bidsOnTeam.length ? bidsOnTeam[bidsOnTeam.length - 1].amount : 0;
-    const amt = amount != null ? Number(amount) : top === 0 ? MIN_OPEN : top + nextIncrement(top);
-    state.auction.bids.push({ team, group, amount: amt, ts: new Date().toISOString() });
+  blockTeam({ team }) {
+    if (!TEAM_IDS.includes(team)) return { error: "Unknown team." };
+    if (state.auction.sales[team]) return { error: "Already sold — reopen it instead." };
+    snapshot(`${team} on the block`);
+    state.auction.skipped = state.auction.skipped.filter(t => t !== team);
+    // Fresh block = fresh bidding: dead bids from an earlier skip/clear must not resurface.
+    state.auction.bids = state.auction.bids.filter(b => b.team !== team);
+    state.auction.onBlock = team;
+    state.auction.phase = "live";
   },
-  sold({ group, amount }) {
-    snapshot();
-    const team = state.auction.order[state.auction.current];
-    const bidsOnTeam = state.auction.bids.filter(b => b.team === team);
-    const last = bidsOnTeam[bidsOnTeam.length - 1];
-    const g = group || last?.group;
-    const amt = amount != null ? Number(amount) : last?.amount;
+  clearBlock() {
+    const team = state.auction.onBlock;
+    snapshot(team ? `clearing ${team}` : "clearing block");
+    if (team) state.auction.bids = state.auction.bids.filter(b => b.team !== team);
+    state.auction.onBlock = null;
+  },
+  logBid({ team, group, amount }) {
+    const cur = state.auction.onBlock;
+    if (!cur) return { error: "No team on the block." };
+    if (team && team !== cur) return { error: `Block changed to ${cur} — bid not logged.` };
+    const g = groupById(group);
+    if (!g) return { error: "Unknown group." };
+    const top = topBidFor(cur);
+    const amt = amount != null ? Number(amount) : top ? top.amount + nextIncrement(top.amount) : MIN_OPEN;
+    if (!(amt >= MIN_OPEN)) return { error: `Minimum bid is $${MIN_OPEN}.` };
+    if (top && amt <= top.amount) return { error: `Top bid is already $${top.amount} — a raise must beat it.` };
+    const remaining = g.budget - groupSpent(g.id);
+    if (amt > remaining) return { error: `${g.name} only has $${remaining} left.` };
+    snapshot(`$${amt} bid on ${cur}`);
+    state.auction.bids.push({ team: cur, group: g.id, amount: amt, ts: new Date().toISOString() });
+  },
+  sold({ team, group, amount }) {
+    const cur = state.auction.onBlock;
+    if (!cur) return { error: "No team on the block." };
+    if (team && team !== cur) return { error: `Block changed to ${cur} — sale not recorded.` };
+    const top = topBidFor(cur);
+    const g = groupById(group || top?.group);
+    const amt = amount != null ? Number(amount) : top?.amount;
     if (!g || !amt) return { error: "No bid to close — log a bid or pass group+amount." };
-    state.auction.sales[team] = { group: g, amount: amt, ts: new Date().toISOString() };
-    if (state.auction.current < state.auction.order.length - 1) state.auction.current++;
-    else state.auction.phase = "done";
+    const remaining = g.budget - groupSpent(g.id);
+    if (amt > remaining) return { error: `${g.name} only has $${remaining} left.` };
+    snapshot(`sale of ${cur} ($${amt})`);
+    // A reopened team keeps its ORIGINAL sale timestamp so already-banked wins stay credited.
+    const ts = state.auction.origSaleTs?.[cur] ?? new Date().toISOString();
+    if (state.auction.origSaleTs) delete state.auction.origSaleTs[cur];
+    state.auction.sales[cur] = { group: g.id, amount: Number(amt), ts };
+    state.auction.onBlock = null;
+    if (Object.keys(state.auction.sales).length >= TEAM_IDS.length) state.auction.phase = "done";
   },
   skipTeam() {
-    snapshot();
-    const team = state.auction.order[state.auction.current];
-    state.auction.skipped.push(team);
-    if (state.auction.current < state.auction.order.length - 1) state.auction.current++;
-    else state.auction.phase = "done";
+    const team = state.auction.onBlock;
+    if (!team) return { error: "No team on the block." };
+    snapshot(`skip of ${team}`);
+    if (!state.auction.skipped.includes(team)) state.auction.skipped.push(team);
+    state.auction.bids = state.auction.bids.filter(b => b.team !== team);
+    state.auction.onBlock = null;
   },
   editSale({ team, amount, group }) {
-    snapshot();
     const s = state.auction.sales[team];
     if (!s) return { error: "Team is not sold." };
+    if (group && !groupById(group)) return { error: "Unknown group." };
+    snapshot(`edit of ${team} sale`);
     if (amount != null && Number(amount) > 0) s.amount = Number(amount);
     if (group) s.group = group;
   },
   editLastBid({ amount, group }) {
-    snapshot();
-    const team = state.auction.order[state.auction.current];
-    const arr = state.auction.bids;
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (arr[i].team === team) {
-        if (amount != null && Number(amount) > 0) arr[i].amount = Number(amount);
-        if (group) arr[i].group = group;
-        return;
-      }
-    }
-    return { error: "No bid to edit." };
-  },
-  putOnBlock({ team }) {
-    const idx = state.auction.order.indexOf(team);
-    if (idx < 0) return { error: "Unknown team." };
-    if (state.auction.sales[team]) return { error: "Already sold — reopen it instead." };
-    state.auction.skipped = state.auction.skipped.filter(t => t !== team);
-    state.auction.current = idx;
-    state.auction.phase = "live";
+    const cur = state.auction.onBlock;
+    if (!cur) return { error: "No team on the block." };
+    const top = topBidFor(cur);
+    if (!top) return { error: "No bid to edit." };
+    if (group && !groupById(group)) return { error: "Unknown group." };
+    snapshot(`edit of top bid on ${cur}`);
+    if (amount != null && Number(amount) > 0) top.amount = Number(amount);
+    if (group) top.group = group;
   },
   reopenTeam({ team }) {
-    snapshot();
+    const s = state.auction.sales[team];
+    if (!s) return { error: "Team is not sold." };
+    snapshot(`reopen of ${team}`);
+    (state.auction.origSaleTs ??= {})[team] = s.ts;
     delete state.auction.sales[team];
     state.auction.skipped = state.auction.skipped.filter(t => t !== team);
     state.auction.bids = state.auction.bids.filter(b => b.team !== team);
-    const idx = state.auction.order.indexOf(team);
-    if (idx >= 0) state.auction.current = idx;
+    state.auction.onBlock = team;
     state.auction.phase = "live";
-  },
-  gotoTeam({ index }) {
-    const i = Number(index);
-    if (i >= 0 && i < state.auction.order.length) state.auction.current = i;
   },
   undo() {
     const prev = undoStack.pop();
-    if (prev) { state.auction = prev.auction; state.trades = prev.trades; }
+    if (!prev) return { error: "Nothing to undo." };
+    state.auction = prev.auction;
+    state.trades = prev.trades;
   },
   addTrade({ team, from, to, pct, cash, ts }) {
     snapshot();
@@ -321,8 +353,8 @@ const actions = {
     state.trades = state.trades.filter(t => t.id !== id);
   },
   resetAuction() {
-    snapshot();
-    state.auction = { phase: "setup", order: [], current: 0, bids: [], sales: {}, skipped: [] };
+    snapshot("full reset");
+    state.auction = { phase: "setup", onBlock: null, bids: [], sales: {}, skipped: [], origSaleTs: {} };
     state.trades = [];
   }
 };
@@ -350,7 +382,7 @@ app.post("/api/transcript", (req, res) => {
     text: String(req.body?.text || "").slice(0, 500),
     amounts: Array.isArray(req.body?.amounts) ? req.body.amounts.slice(0, 5) : [],
     group: req.body?.group || null,
-    team: state.auction.order[state.auction.current] || null
+    team: state.auction.onBlock || null
   };
   if (!line.text) return res.status(400).json({ error: "empty" });
   fs.appendFileSync(tFile(), JSON.stringify(line) + "\n");

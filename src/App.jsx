@@ -94,12 +94,16 @@ const TENS = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy:
 const REL_RE = /\b(more|another|bump|raise|add|plus|up)\b/i;
 
 // Parse spoken auction talk into candidate bid amounts, given the current top bid.
-// Handles absolutes ("350", "three fifty", "seven hundred", "$425", "twelve fifty")
-// and relative raises ("twenty five more", "bump it fifty", "another hundred").
 export function extractAmounts(text, topBid = 0) {
+  // Speech APIs write big amounts with thousands separators ("$2,500") — de-comma before matching.
+  text = text.replace(/(\d),(?=\d{3}\b)/g, "$1");
   const raw = [];
   for (const m of text.matchAll(/\$?\b([1-9]\d{1,3})\b/g)) raw.push(Number(m[1]));
   const toks = text.toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(t => t && t !== "and");
+  for (let k = 0; k < toks.length; k++) {
+    if (toks[k] === "grand") toks[k] = "thousand";
+    if (toks[k] === "a" && (toks[k + 1] === "hundred" || toks[k + 1] === "thousand" || toks[k + 1] === "grand")) toks[k] = "one";
+  }
   for (let i = 0; i < toks.length; i++) {
     let val = 0, j = i;
     const small = t => (ONES[t] ?? null);
@@ -120,6 +124,14 @@ export function extractAmounts(text, topBid = 0) {
     } else if (TENS[toks[j]] != null) { // bare "fifty" / "seventy five"
       val = TENS[toks[j]]; j++;
       if (small(toks[j]) != null) { val += small(toks[j]); j++; }
+      if (toks[j] === "hundred") { // "twenty five hundred" -> 2500
+        val = val * 100; j++;
+        if (TENS[toks[j]] != null) { val += TENS[toks[j]]; j++; if (small(toks[j]) != null) { val += small(toks[j]); j++; } }
+        else if (small(toks[j]) != null) { val += small(toks[j]); j++; }
+      } else if (val % 10 !== 0 && TENS[toks[j]] != null) { // "sixty seven fifty" -> 6750 (not "fifty fifty" banter)
+        val = val * 100 + TENS[toks[j]]; j++;
+        if (small(toks[j]) != null) { val += small(toks[j]); j++; }
+      }
     }
     if (val >= 25) { raw.push(val); i = j - 1; }
   }
@@ -127,8 +139,8 @@ export function extractAmounts(text, topBid = 0) {
   const out = new Set();
   for (let v of raw) {
     v = Math.round(v / 25) * 25;
-    if (v >= 50 && v > topBid) out.add(v);           // a normal raise, spoken absolutely
-    else if (relative && v >= 25 && v <= 1000) out.add(topBid + v); // "fifty more" on top of the bid
+    if (v >= 50 && v > topBid) out.add(v);
+    else if (relative && v >= 25 && v <= 1000) out.add(topBid + v);
   }
   return [...out].filter(v => v >= 50 && v <= 7000);
 }
@@ -147,6 +159,52 @@ export function matchGroup(text, groups) {
   }
   return hits.length === 1 ? hits[0] : null;
 }
+
+// Recognize which NFL team the room is talking about. Nicknames beat cities;
+// genuinely ambiguous phrases ("New York", "Los Angeles") return both candidates.
+const TEAM_PHRASES = {
+  bills: "BUF", buffalo: "BUF", dolphins: "MIA", fins: "MIA", miami: "MIA",
+  patriots: "NE", pats: "NE", "new england": "NE", jets: "NYJ", giants: "NYG",
+  ravens: "BAL", bengals: "CIN", cincinnati: "CIN", cincy: "CIN",
+  browns: "CLE", cleveland: "CLE", steelers: "PIT", pittsburgh: "PIT",
+  texans: "HOU", houston: "HOU", colts: "IND", indy: "IND", indianapolis: "IND",
+  jaguars: "JAX", jags: "JAX", jacksonville: "JAX", titans: "TEN", tennessee: "TEN",
+  broncos: "DEN", denver: "DEN", chiefs: "KC", "kansas city": "KC",
+  raiders: "LV", "las vegas": "LV", chargers: "LAC", bolts: "LAC",
+  cowboys: "DAL", dallas: "DAL", eagles: "PHI", philly: "PHI", philadelphia: "PHI",
+  commanders: "WSH", washington: "WSH", bears: "CHI", chicago: "CHI",
+  lions: "DET", detroit: "DET", packers: "GB", "green bay": "GB",
+  vikings: "MIN", vikes: "MIN", minnesota: "MIN", falcons: "ATL", atlanta: "ATL",
+  panthers: "CAR", carolina: "CAR", saints: "NO", "new orleans": "NO",
+  buccaneers: "TB", bucs: "TB", "tampa bay": "TB", tampa: "TB",
+  cardinals: "ARI", cards: "ARI", arizona: "ARI", rams: "LAR",
+  niners: "SF", "49ers": "SF", "forty niners": "SF", "san francisco": "SF",
+  seahawks: "SEA", seattle: "SEA", hawks: "SEA", baltimore: "BAL",
+  "new york": ["NYG", "NYJ"], "los angeles": ["LAR", "LAC"]
+};
+export function detectTeams(text) {
+  // The pool is literally named "Cardinal Calcutta" — that phrase is never Arizona coming up for bid.
+  const scrubbed = text.toLowerCase().replace(/cardinal'?s?\s+calcutta/g, " ");
+  const norm = " " + scrubbed.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim() + " ";
+  const found = new Set();
+  const maybes = [];
+  let rest = norm;
+  for (const [phrase, team] of Object.entries(TEAM_PHRASES).sort((a, b) => b[0].length - a[0].length)) {
+    if (rest.includes(` ${phrase} `)) {
+      rest = rest.replaceAll(` ${phrase} `, " · ");
+      if (Array.isArray(team)) maybes.push(team);
+      else found.add(team);
+    }
+  }
+  // "New York" only stays ambiguous if no nickname resolved it in the same breath.
+  const ambiguous = [];
+  for (const pair of maybes) {
+    if (!pair.some(t => found.has(t))) ambiguous.push(pair);
+  }
+  return { teams: [...found], ambiguous };
+}
+
+const CUE_RE = /\b(next|block|selling|up now|now up|moving on|here we go|switch)\b/i;
 
 function SpeechPanel({ onFinal }) {
   const [listening, setListening] = useState(false);
@@ -182,14 +240,31 @@ function SpeechPanel({ onFinal }) {
   return (
     <div className="speech">
       <button className={listening ? "on" : ""} onClick={() => (listening ? stop() : start())}>
-        {listening ? "🎙 Listening…" : "🎙 Listen for bids"}
+        {listening ? "🎙 Listening…" : "🎙 Listen to the draft"}
       </button>
       {listening && <span className="dim transcript">{line || "…"}</span>}
     </div>
   );
 }
 
-function TranscriptLog({ lines, teams }) {
+function ManualLine({ onFinal }) {
+  const [text, setText] = useState("");
+  const submit = () => { if (text.trim()) { onFinal(text.trim()); setText(""); } };
+  return (
+    <div className="speech">
+      <input
+        value={text}
+        placeholder="mic missed it? type what was said…"
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") submit(); }}
+        style={{ flex: 1 }}
+      />
+      <button onClick={submit}>➤</button>
+    </div>
+  );
+}
+
+function TranscriptLog({ lines }) {
   if (!lines.length) return null;
   return (
     <details className="upnext">
@@ -213,67 +288,137 @@ function Draft({ view, lines }) {
   const { auction, config } = state;
   const [customAmt, setCustomAmt] = useState(null);
   const [suggestion, setSuggestion] = useState(null);
+  const [notice, setNotice] = useState(null);
   const dedupe = useRef({ amount: 0, ts: 0, sold: 0 });
 
-  const team = auction.order[auction.current];
-  useEffect(() => { setSuggestion(null); setCustomAmt(null); }, [team]);
+  const team = auction.onBlock;
+  const suggestionRef = useRef(null);
+  suggestionRef.current = suggestion;
+  useEffect(() => {
+    // Only clear cards that belong to a DIFFERENT team — the opening-bid card created in the
+    // same utterance as an auto-block must survive the block landing.
+    setSuggestion(s => (s && (s.kind === "bid" || s.kind === "sold") && s.team !== team ? null : s));
+    setCustomAmt(null);
+    dedupe.current = { amount: 0, ts: 0, sold: 0 };
+  }, [team]);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const bidsOnTeam = auction.bids.filter(b => b.team === team);
-  const top = bidsOnTeam[bidsOnTeam.length - 1];
-  const topRef = useRef(top);
-  topRef.current = top;
+  const top = bidsOnTeam.reduce((a, b) => (!a || b.amount >= a.amount ? b : a), null);
+  useEffect(() => { setCustomAmt(null); }, [top?.amount]);
+  const liveRef = useRef({});
+  liveRef.current = { team, top, sales: auction.sales, groups: config.groups };
 
-  const handleFinal = txt => {
-    const topAmt = topRef.current?.amount || 0;
+  const flash = msg => setNotice(msg);
+  const surface = r => { if (r?.error) flash({ text: `⚠️ ${r.error}` }); };
+
+  // Dedupe stamps happen HERE, on confirm — not when a card is merely shown — so dismissing
+  // a false card never swallows the real event that follows.
+  const confirmBid = (t, group, amount) => {
+    dedupe.current = { ...dedupe.current, amount, ts: Date.now() };
+    act("logBid", { team: t, group, amount }).then(surface);
+    setSuggestion(null);
+    setCustomAmt(null);
+  };
+  const confirmSold = t => {
+    dedupe.current.sold = Date.now();
+    const next = suggestionRef.current?.kind === "sold" ? suggestionRef.current.next : null;
+    act("sold", { team: t }).then(r => {
+      surface(r);
+      if (!r?.error && next) act("blockTeam", { team: next }).then(surface);
+    });
+    setSuggestion(null);
+    setCustomAmt(null);
+  };
+
+  const handleFinal = (txt, { manual = false } = {}) => {
+    const { team: curTeam, top: curTop, sales, groups } = liveRef.current;
+    const topAmt = curTop?.amount || 0;
     const amounts = extractAmounts(txt, topAmt);
-    const group = matchGroup(txt, config.groups);
+    const group = matchGroup(txt, groups);
+    const det = detectTeams(txt);
     fetch("/api/transcript", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: txt, amounts, group })
     }).catch(() => {});
     const now = Date.now();
-    if (/\bsold\b/i.test(txt) && now - dedupe.current.sold > 6000) {
-      dedupe.current.sold = now;
-      setSuggestion({ kind: "sold", heard: txt });
+    const unsold = det.teams.filter(t => !sales[t]);
+    const ambiguousUnsold = det.ambiguous.map(pair => pair.filter(t => !sales[t])).filter(p => p.length);
+
+    // 1) "sold" closes the current team — and may name the next team in the same breath
+    if (curTeam && /\bsold\b/i.test(txt) && (manual || now - dedupe.current.sold > 6000)) {
+      const next = unsold.filter(t => t !== curTeam);
+      setSuggestion({ kind: "sold", team: curTeam, heard: txt, next: next.length === 1 ? next[0] : null });
       return;
     }
-    if (amounts.length) {
+
+    // 2) which team is up? Auto-block only on a confident call: a cue phrase ("next up…"),
+    // a short team-focused line, or a typed line — long banter gets a confirm card instead.
+    if (!curTeam) {
+      const tokCount = txt.trim().split(/\s+/).length;
+      const confident = unsold.length === 1 && !ambiguousUnsold.length && (manual || CUE_RE.test(txt) || tokCount <= 5);
+      if (confident) {
+        act("blockTeam", { team: unsold[0] }).then(surface);
+        flash({ text: `${moji(unsold[0])} Heard it — ${unsold[0]} on the block`, undo: () => act("clearBlock") });
+        if (amounts.length) setSuggestion({ kind: "bid", team: unsold[0], amount: Math.max(...amounts), group, heard: txt });
+        return;
+      }
+      const cands = [...new Set([...unsold, ...ambiguousUnsold.flat()])];
+      if (cands.length) {
+        setSuggestion({ kind: "team", candidates: cands, heard: txt });
+        return;
+      }
+    } else if ((unsold.some(t => t !== curTeam) || ambiguousUnsold.length) && CUE_RE.test(txt)) {
+      // A different team named with a "next up"-style cue while one is on the block.
+      if (suggestionRef.current?.kind === "sold") {
+        // Never clobber an unconfirmed sale — attach the next team to the sold card instead.
+        const next = unsold.filter(t => t !== curTeam);
+        if (next.length === 1) setSuggestion(s => (s?.kind === "sold" ? { ...s, next: next[0] } : s));
+        return;
+      }
+      const cands = [...new Set([...unsold.filter(t => t !== curTeam), ...ambiguousUnsold.flat()])];
+      setSuggestion({ kind: "team", candidates: cands, heard: txt });
+      return;
+    }
+
+    // 3) plain bid amounts on the current team
+    if (curTeam && amounts.length) {
       const amount = Math.max(...amounts);
-      if (amount === dedupe.current.amount && now - dedupe.current.ts < 8000) return;
-      dedupe.current = { ...dedupe.current, amount, ts: now };
-      setSuggestion({ kind: "bid", amount, group, heard: txt });
+      if (!manual && amount === dedupe.current.amount && now - dedupe.current.ts < 8000) return;
+      setSuggestion({ kind: "bid", team: curTeam, amount, group, heard: txt });
     }
   };
 
   if (auction.phase === "setup")
     return (
       <div className="pad">
-        <h2>Pre-flight</h2>
-        <p>Set your groups and pot guess in <b>Setup</b>, then start. The order can be shuffled here or entered to match the commissioners' draw.</p>
-        <div className="row gap">
-          <button className="big go" onClick={() => act("startAuction")}>Start auction</button>
-          <button className="big" onClick={() => act("shuffleOrder")}>Shuffle order</button>
-        </div>
+        <h2>Draft night</h2>
+        <p>No order needed — once you start, the app <b>listens for whichever team the auctioneer calls</b> and puts it on the block itself. You just confirm bids as it hears them. Set groups + aliases in <b>Setup</b> first.</p>
+        <button className="big go" onClick={() => act("startAuction")}>🏈 Start draft</button>
         {!valuation && <p className="dim">Valuations are computing from the live schedule + win totals…</p>}
-        <OrderPreview view={view} />
+        <BestRemaining view={view} title="Value board" />
       </div>
     );
 
-  if (auction.phase === "done" || !team)
+  if (auction.phase === "done")
     return (
       <div className="pad">
-        <h2>Auction complete</h2>
+        <h2>🎉 Auction complete</h2>
         <p>Head to <b>Board</b> (prices stay editable there) and <b>Season</b>.</p>
-        <TranscriptLog lines={lines} teams={teams} />
+        <TranscriptLog lines={lines} />
       </div>
     );
 
-  const v = valuation?.teams?.[team];
-  const fair = repricing.fair[team] || 0;
+  const v = team ? valuation?.teams?.[team] : null;
+  const fair = team ? repricing.fair[team] || 0 : 0;
   const target = fair * config.targetMargin;
   const nextBid = top ? top.amount + (top.amount < 500 ? 25 : 50) : 50;
   const bidAmt = customAmt ?? nextBid;
-  const status = !top ? "open" : top.amount <= target ? "green" : top.amount <= fair ? "amber" : "red";
+  const status = !team ? "open" : !top ? "open" : top.amount <= target ? "green" : top.amount <= fair ? "amber" : "red";
 
   return (
     <div className="pad draft">
@@ -289,44 +434,76 @@ function Draft({ view, lines }) {
         })}
       </div>
 
-      <div className={"block " + status}>
-        <div className="blockhead">
-          <img src={logo(team)} alt="" />
-          <div>
-            <h1>{moji(team)} {teams[team].name}</h1>
-            <span className="dim">{teams[team].conf} {teams[team].div} · #{auction.current + 1} of {auction.order.length}</span>
+      {team ? (
+        <div className={"block " + status}>
+          <div className="blockhead">
+            <img src={logo(team)} alt="" />
+            <div style={{ flex: 1 }}>
+              <h1>{moji(team)} {teams[team].name}</h1>
+              <span className="dim">{teams[team].conf} {teams[team].div} · {Object.keys(auction.sales).length} of 32 sold</span>
+            </div>
+            <button className="tiny" title="Wrong team? Clear the block" onClick={() => act("clearBlock")}>✕</button>
           </div>
+          {v ? (
+            <div className="stats">
+              <div><label>share</label><b>{v.share.toFixed(2)}%</b></div>
+              <div><label>E[wins]</label><b>{v.expWins.toFixed(1)}</b></div>
+              <div><label>P(playoffs)</label><b>{Math.round(v.pPlayoffs * 100)}%</b></div>
+              <div><label>P(SB)</label><b>{(v.pSbWin * 100).toFixed(1)}%</b></div>
+            </div>
+          ) : <p className="dim">no valuation yet</p>}
+          <div className="prices">
+            <div className="price"><label>target</label><b className="green">{fmt$(target)}</b></div>
+            <div className="price main"><label>fair / max</label><b>{fmt$(fair)}</b></div>
+            <div className="price"><label>top bid</label>
+              <b>{top ? `${fmt$(top.amount)} · ${shortName(groupName(config, top.group))}` : "—"}</b>
+              {top && (
+                <button className="tiny" title="Correct the top bid"
+                  onClick={() => {
+                    const amt = window.prompt("Correct top bid amount:", top.amount);
+                    if (amt && Number(amt) > 0) act("editLastBid", { amount: Number(amt) });
+                  }}>✎</button>
+              )}
+            </div>
+          </div>
+          {status === "green" && top && <div className="verdict green">💎 Under target — hammer time.</div>}
+          {status === "red" && <div className="verdict">🚨 Over fair — let someone else buy the trophy.</div>}
+          {status === "amber" && <div className="verdict amber">🤔 At fair — only if the plan says so.</div>}
         </div>
-        {v ? (
-          <div className="stats">
-            <div><label>share</label><b>{v.share.toFixed(2)}%</b></div>
-            <div><label>E[wins]</label><b>{v.expWins.toFixed(1)}</b></div>
-            <div><label>P(playoffs)</label><b>{Math.round(v.pPlayoffs * 100)}%</b></div>
-            <div><label>P(SB)</label><b>{(v.pSbWin * 100).toFixed(1)}%</b></div>
-          </div>
-        ) : <p className="dim">no valuation yet</p>}
-        <div className="prices">
-          <div className="price"><label>target</label><b className="green">{fmt$(target)}</b></div>
-          <div className="price main"><label>fair / max</label><b>{fmt$(fair)}</b></div>
-          <div className="price"><label>top bid</label>
-            <b>{top ? `${fmt$(top.amount)} · ${shortName(groupName(config, top.group))}` : "—"}</b>
-            {top && (
-              <button className="tiny" title="Correct the top bid"
-                onClick={() => {
-                  const amt = window.prompt("Correct top bid amount:", top.amount);
-                  if (amt && Number(amt) > 0) act("editLastBid", { amount: Number(amt) });
-                }}>✎</button>
-            )}
-          </div>
+      ) : (
+        <div className="block open idle">
+          <h1>👂 Listening for the next team…</h1>
+          <p className="dim">Say it on the call ("next up, the Broncos") and it lands here — or pick manually below.</p>
         </div>
-        {status === "green" && <div className="verdict green">💎 Under target — hammer time.</div>}
-        {status === "red" && <div className="verdict">🚨 Over fair — let someone else buy the trophy.</div>}
-        {status === "amber" && <div className="verdict amber">🤔 At fair — only if the plan says so.</div>}
-      </div>
+      )}
 
       <SpeechPanel onFinal={handleFinal} />
+      <ManualLine onFinal={txt => handleFinal(txt, { manual: true })} />
 
-      {suggestion && suggestion.kind === "bid" && (
+      {notice && (
+        <div className="notice">
+          <span>{notice.text}</span>
+          {notice.undo && <button className="tiny" onClick={() => { notice.undo(); setNotice(null); }}>undo</button>}
+        </div>
+      )}
+
+      {suggestion?.kind === "team" && (
+        <div className="suggest">
+          <div className="suggesthead">
+            Heard a team{team ? " (switch?)" : ""} — which one?
+            <span className="dim transcript">“{suggestion.heard}”</span>
+          </div>
+          <div className="groupbtns">
+            {suggestion.candidates.map(t => (
+              <button key={t} className="go" onClick={() => { act("blockTeam", { team: t }); setSuggestion(null); }}>
+                {moji(t)} {teams[t].name}
+              </button>
+            ))}
+            <button onClick={() => setSuggestion(null)}>✕</button>
+          </div>
+        </div>
+      )}
+      {suggestion?.kind === "bid" && suggestion.team === team && (
         <div className="suggest">
           <div className="suggesthead">
             Heard <b>{fmt$(suggestion.amount)}</b>{suggestion.group ? <> from <b>{shortName(groupName(config, suggestion.group))}</b></> : " — who said it?"}
@@ -336,14 +513,14 @@ function Draft({ view, lines }) {
             {suggestion.group && (
               <button className="go"
                 disabled={summaries[suggestion.group].remaining < suggestion.amount}
-                onClick={() => { act("logBid", { group: suggestion.group, amount: suggestion.amount }); setSuggestion(null); setCustomAmt(null); }}>
+                onClick={() => confirmBid(suggestion.team, suggestion.group, suggestion.amount)}>
                 ✓ Confirm {fmt$(suggestion.amount)} · {shortName(groupName(config, suggestion.group))}
               </button>
             )}
             {config.groups.filter(g => g.id !== suggestion.group).map(g => (
               <button key={g.id} className={g.id === config.ourGroupId ? "ours" : ""}
                 disabled={summaries[g.id].remaining < suggestion.amount}
-                onClick={() => { act("logBid", { group: g.id, amount: suggestion.amount }); setSuggestion(null); setCustomAmt(null); }}>
+                onClick={() => confirmBid(suggestion.team, g.id, suggestion.amount)}>
                 {shortName(g.name)}
               </button>
             ))}
@@ -351,54 +528,61 @@ function Draft({ view, lines }) {
           </div>
         </div>
       )}
-      {suggestion && suggestion.kind === "sold" && (
+      {suggestion?.kind === "sold" && suggestion.team === team && (
         <div className="suggest">
           <div className="suggesthead">
             Heard <b>SOLD</b> — confirm {top ? `${fmt$(top.amount)} to ${shortName(groupName(config, top.group))}` : "(no bid logged yet)"}?
+            {suggestion.next && <span className="dim">then {moji(suggestion.next)} {suggestion.next} goes up next</span>}
             <span className="dim transcript">“{suggestion.heard}”</span>
           </div>
           <div className="groupbtns">
-            <button className="go" disabled={!top}
-              onClick={() => { act("sold"); setSuggestion(null); setCustomAmt(null); }}>Confirm sale</button>
+            <button className="go" disabled={!top} onClick={() => confirmSold(suggestion.team)}>🔨 Confirm sale</button>
             <button onClick={() => setSuggestion(null)}>✕</button>
           </div>
         </div>
       )}
 
-      <div className="bidrow">
-        <div className="stepper">
-          <button onClick={() => setCustomAmt(Math.max(50, bidAmt - (bidAmt <= 500 ? 25 : 50)))}>−</button>
-          <span onClick={() => {
-            const amt = window.prompt("Bid amount:", bidAmt);
-            if (amt && Number(amt) > 0) setCustomAmt(Number(amt));
-          }}>{fmt$(bidAmt)}</span>
-          <button onClick={() => setCustomAmt(bidAmt + (bidAmt < 500 ? 25 : 50))}>+</button>
-        </div>
-        <div className="groupbtns">
-          {config.groups.map(g => (
-            <button
-              key={g.id}
-              disabled={summaries[g.id].remaining < bidAmt}
-              className={g.id === config.ourGroupId ? "ours" : ""}
-              onClick={() => { act("logBid", { group: g.id, amount: bidAmt }); setCustomAmt(null); }}
-            >
-              {shortName(g.name)}
+      {team && (
+        <>
+          <div className="bidrow">
+            <div className="stepper">
+              <button onClick={() => setCustomAmt(Math.max(50, bidAmt - (bidAmt <= 500 ? 25 : 50)))}>−</button>
+              <span onClick={() => {
+                const amt = window.prompt("Bid amount:", bidAmt);
+                if (amt && Number(amt) > 0) setCustomAmt(Number(amt));
+              }}>{fmt$(bidAmt)}</span>
+              <button onClick={() => setCustomAmt(bidAmt + (bidAmt < 500 ? 25 : 50))}>+</button>
+            </div>
+            <div className="groupbtns">
+              {config.groups.map(g => (
+                <button
+                  key={g.id}
+                  disabled={summaries[g.id].remaining < bidAmt || bidAmt <= (top?.amount || 0)}
+                  className={g.id === config.ourGroupId ? "ours" : ""}
+                  onClick={() => confirmBid(team, g.id, bidAmt)}
+                >
+                  {shortName(g.name)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="row gap actions">
+            <button className="big go" disabled={!top} onClick={() => confirmSold(team)}>
+              🔨 SOLD {top ? `· ${fmt$(top.amount)}` : ""}
             </button>
-          ))}
-        </div>
-      </div>
+            <button className="big" disabled={!view.undoLabel} title={view.undoLabel ? `Undo ${view.undoLabel}` : "Nothing to undo"}
+              onClick={() => act("undo").then(surface)}>
+              ↩︎ {view.undoLabel ? `Undo ${view.undoLabel}` : "Undo"}
+            </button>
+            <button className="big warn" onClick={() => { if (confirm("Skip this team (no sale)?")) act("skipTeam").then(surface); }}>Skip</button>
+          </div>
+        </>
+      )}
 
-      <div className="row gap actions">
-        <button className="big go" disabled={!top} onClick={() => { act("sold"); setCustomAmt(null); }}>
-          🔨 SOLD {top ? `· ${fmt$(top.amount)}` : ""}
-        </button>
-        <button className="big" onClick={() => act("undo")}>Undo</button>
-        <button className="big warn" onClick={() => { if (confirm("Skip this team (no sale)?")) act("skipTeam"); }}>Skip</button>
-      </div>
-
-      <UpNext view={view} />
+      {!team && <QuickPick view={view} />}
+      <BestRemaining view={view} title="Best remaining" />
       <SoldTicker view={view} />
-      <TranscriptLog lines={lines} teams={teams} />
+      <TranscriptLog lines={lines} />
     </div>
   );
 }
@@ -410,35 +594,40 @@ function shortName(name) {
 }
 const groupName = (config, id) => config.groups.find(g => g.id === id)?.name || id;
 
-function OrderPreview({ view }) {
-  const { state, repricing } = view;
-  if (!state.auction.order.length) return null;
+function QuickPick({ view }) {
+  const { state, teams, repricing } = view;
+  const unsold = Object.keys(teams)
+    .filter(t => !state.auction.sales[t])
+    .sort((a, b) => (repricing.fair[b] || 0) - (repricing.fair[a] || 0));
+  if (!unsold.length) return null;
   return (
-    <div className="upnext">
-      <h3>Order</h3>
-      <div className="strip">
-        {state.auction.order.map(t => (
-          <div key={t} className="mini">
-            <img src={logo(t)} alt="" /><span>{t}</span><em>{fmt$(repricing.fair[t] || 0)}</em>
-          </div>
-        ))}
-      </div>
+    <div className="speech">
+      <select value="" onChange={e => { if (e.target.value) act("blockTeam", { team: e.target.value }); }}>
+        <option value="">put a team on the block…</option>
+        {unsold.map(t => <option key={t} value={t}>{moji(t)} {teams[t].name} — {fmt$(repricing.fair[t] || 0)}</option>)}
+      </select>
     </div>
   );
 }
 
-function UpNext({ view }) {
+function BestRemaining({ view, title }) {
   const { state, repricing } = view;
-  const { order, current, sales, skipped } = state.auction;
-  const upcoming = order.slice(current + 1).filter(t => !sales[t] && !skipped.includes(t)).slice(0, 6);
-  if (!upcoming.length) return null;
+  const { sales, skipped, onBlock } = state.auction;
+  const remaining = Object.keys(view.teams)
+    .filter(t => !sales[t] && t !== onBlock)
+    .sort((a, b) => (repricing.fair[b] || 0) - (repricing.fair[a] || 0))
+    .slice(0, 6);
+  if (!remaining.length) return null;
   return (
     <div className="upnext">
-      <h3>Up next</h3>
+      <h3>{title}</h3>
       <div className="strip">
-        {upcoming.map(t => (
-          <div key={t} className="mini">
+        {remaining.map(t => (
+          // Tap-to-block only while the block is empty — a stray tap mid-bidding must not hijack the auction.
+          <div key={t} className={"mini" + (state.auction.phase === "live" && !onBlock ? " clickable" : "")}
+            onClick={() => state.auction.phase === "live" && !onBlock && act("blockTeam", { team: t })}>
             <img src={logo(t)} alt="" /><span>{moji(t)} {t}</span><em>{fmt$(repricing.fair[t] || 0)}</em>
+            {skipped.includes(t) && <em className="amber">skipped</em>}
           </div>
         ))}
       </div>
@@ -474,8 +663,8 @@ function SoldTicker({ view }) {
 // ---------------- BOARD (every price editable here) ----------------
 function Board({ view }) {
   const { state, teams, valuation, repricing } = view;
-  const { sales, order, current, phase } = state.auction;
-  const [editing, setEditing] = useState(null); // team abbr
+  const { sales, onBlock, phase } = state.auction;
+  const [editing, setEditing] = useState(null);
   const [editAmt, setEditAmt] = useState("");
   const [editGroup, setEditGroup] = useState("");
   const rows = Object.keys(teams)
@@ -499,11 +688,11 @@ function Board({ view }) {
         <thead><tr><th>Team</th><th className="r">Share</th><th className="r">Fair</th><th>Status</th></tr></thead>
         <tbody>
           {rows.map(r => {
-            const onBlock = phase === "live" && order[current] === r.t;
+            const isOnBlock = phase === "live" && onBlock === r.t;
             const d = r.sale ? r.sale.amount - r.fair : 0;
             return (
               <React.Fragment key={r.t}>
-                <tr className={onBlock ? "hl" : ""}>
+                <tr className={isOnBlock ? "hl" : ""}>
                   <td><img className="tinylogo" src={logo(r.t)} alt="" /> {moji(r.t)} {teams[r.t].name}</td>
                   <td className="r">{r.share.toFixed(2)}%</td>
                   <td className="r">{fmt$(r.fair)}</td>
@@ -514,12 +703,12 @@ function Board({ view }) {
                         <em className={d <= 0 ? "green" : "red"}>({d <= 0 ? "" : "+"}{Math.round(d)})</em>{" "}
                         <button className="tiny" onClick={() => (editing === r.t ? setEditing(null) : startEdit(r))}>✎</button>
                       </span>
-                    ) : onBlock ? (
+                    ) : isOnBlock ? (
                       <b className="amber">ON THE BLOCK</b>
                     ) : (
                       <span className="row" style={{ gap: ".4rem" }}>
                         <span className="dim">—</span>
-                        {phase === "live" && <button className="tiny" title="Put on the block now" onClick={() => act("putOnBlock", { team: r.t })}>▶ block</button>}
+                        {phase === "live" && <button className="tiny" title="Put on the block now" onClick={() => act("blockTeam", { team: r.t })}>▶ block</button>}
                       </span>
                     )}
                   </td>
@@ -585,7 +774,7 @@ function Season({ view }) {
       <div className="teamearn">
         {Object.entries(earnedByTeam).sort((a, b) => b[1] - a[1]).map(([t, sh]) => (
           <div key={t} className="soldline">
-            <img src={logo(t)} alt="" /><span>{teams[t].name}</span>
+            <img src={logo(t)} alt="" /><span>{moji(t)} {teams[t].name}</span>
             <b>{sh.toFixed(2)}%</b><em className="dim">{fmt$((sh / 100) * potForSettlement)}</em>
           </div>
         ))}
@@ -618,12 +807,12 @@ function Trades({ view }) {
 
   return (
     <div className="pad">
-      <h2>Trade desk</h2>
+      <h2>🤝 Trade desk</h2>
       {!soldTeams.length ? <p className="dim">Trades open once teams are sold.</p> : (
         <div className="tradeform">
           <select value={form.team} onChange={e => setForm({ ...form, team: e.target.value, from: "" })}>
             <option value="">team…</option>
-            {soldTeams.map(t => <option key={t} value={t}>{teams[t].name}</option>)}
+            {soldTeams.map(t => <option key={t} value={t}>{moji(t)} {teams[t].name}</option>)}
           </select>
           <select value={form.from} onChange={e => setForm({ ...form, from: e.target.value })}>
             <option value="">seller…</option>
@@ -667,9 +856,10 @@ function Trades({ view }) {
 function Setup({ view }) {
   const { state } = view;
   const [groups, setGroups] = useState(state.config.groups);
-  const [orderText, setOrderText] = useState(state.auction.order.join(" "));
-  useEffect(() => setGroups(state.config.groups), [state.config.groups]);
-  useEffect(() => setOrderText(state.auction.order.join(" ")), [state.auction.order]);
+  const [dirty, setDirty] = useState(false);
+  // A broadcast from any device re-syncs the form — but never while there are unsaved edits.
+  useEffect(() => { if (!dirty) setGroups(state.config.groups); }, [state.config.groups, dirty]);
+  const edit = next => { setDirty(true); setGroups(next); };
 
   return (
     <div className="pad setup">
@@ -678,18 +868,19 @@ function Setup({ view }) {
       {groups.map((g, i) => (
         <div key={g.id} className="grouprow">
           <div className="row gap">
-            <input value={g.name} placeholder="group name" onChange={e => setGroups(groups.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
+            <input value={g.name} placeholder="group name" onChange={e => edit(groups.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
             <input type="number" step="500" value={g.budget} style={{ width: 90 }}
-              onChange={e => setGroups(groups.map((x, j) => j === i ? { ...x, budget: Number(e.target.value) } : x))} />
-            <button onClick={() => setGroups(groups.filter((_, j) => j !== i))}>✕</button>
+              onChange={e => edit(groups.map((x, j) => j === i ? { ...x, budget: Number(e.target.value) } : x))} />
+            <button onClick={() => edit(groups.filter((_, j) => j !== i))}>✕</button>
           </div>
           <input value={g.aliases || ""} placeholder="aliases (member names)"
-            onChange={e => setGroups(groups.map((x, j) => j === i ? { ...x, aliases: e.target.value } : x))} />
+            onChange={e => edit(groups.map((x, j) => j === i ? { ...x, aliases: e.target.value } : x))} />
         </div>
       ))}
       <div className="row gap">
-        <button onClick={() => setGroups([...groups, { id: `g${Date.now()}`, name: `Group ${groups.length + 1}`, budget: 7000, aliases: "" }])}>+ group</button>
-        <button className="go" onClick={() => act("setGroups", { groups })}>Save groups</button>
+        <button onClick={() => edit([...groups, { id: `g${Date.now()}`, name: `Group ${groups.length + 1}`, budget: 7000, aliases: "" }])}>+ group</button>
+        <button className="go" onClick={() => act("setGroups", { groups }).then(() => setDirty(false))}>Save groups{dirty ? " •" : ""}</button>
+        {dirty && <button onClick={() => { setDirty(false); setGroups(state.config.groups); }}>Discard edits</button>}
       </div>
 
       <h2>Our group</h2>
@@ -704,14 +895,6 @@ function Setup({ view }) {
       <label>Target margin (bid up to fair × this)
         <input type="number" step="0.05" min="0.3" max="1.5" defaultValue={state.config.targetMargin} onBlur={e => act("setTargetMargin", { margin: e.target.value })} />
       </label>
-
-      <h2>Auction order</h2>
-      <p className="dim">Space-separated abbreviations, in the commissioners' drawn order — or shuffle. Missing teams get appended automatically.</p>
-      <textarea rows="3" value={orderText} onChange={e => setOrderText(e.target.value)} />
-      <div className="row gap">
-        <button onClick={() => act("setOrder", { order: orderText.trim().toUpperCase().split(/[\s,]+/).filter(Boolean) })}>Save order</button>
-        <button onClick={() => act("shuffleOrder")}>Shuffle</button>
-      </div>
 
       <h2>Danger zone</h2>
       <button className="warn" onClick={() => { if (confirm("Reset the entire auction and all trades?")) act("resetAuction"); }}>

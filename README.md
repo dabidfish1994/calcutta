@@ -17,74 +17,81 @@ npm start          # http://localhost:4600
 Everyone on the team opens the same URL (phone or laptop). State syncs over WebSocket.
 
 On boot the server automatically: fetches the current schedule/results → refits ratings →
-recomputes valuations. It re-syncs every 6 hours all season (and on the Season tab's
-"Sync" button). The only manual input the system ever needs:
+recomputes valuations. It re-syncs every 6 hours all season. Set `DATA_DIR` to put runtime
+state on a persistent volume (Railway/Fly); it seeds itself from the repo's `data/` folder.
 
-1. **Setup tab, once**: group names/count (I seeded 6 — fix when the league is final),
-   which group is ours, prior pot guess, and the auction order (paste the commissioners'
-   drawn order, or shuffle).
-2. **Draft night**: tap who bid (amount auto-increments $25/$50 per the rules), tap SOLD.
-   Everything else — pot re-estimation, fair prices, max-bid guidance, budget tracking — is automatic.
-   Better: hit **🎙 Listen for bids** on the laptop that's on the Zoom call (Chrome, mic
-   allowed, sound through speakers so it hears everyone). It live-transcribes the room,
-   parses spoken amounts ("three fifty", "seven hundred", "$425"), and pops a
-   confirmation card with the amount prefilled — one tap on the group that said it logs
-   the bid. When it hears "sold" it prompts to confirm the sale to the top bidder.
-   Nothing is ever logged without one of us confirming. Run the listener on ONE device
-   only (suggestions are per-device; confirmed bids sync to everyone).
-3. **Trades**: record them as they happen (the desk prices any partial stake for you).
+## Draft night — the dynamic flow
 
-## During the draft
+There is **no draft order to configure**. Hit **🏈 Start draft**, tap **🎙 Listen to the
+draft** on the laptop that's on the Zoom call (Chrome, mic allowed, audio through
+speakers), and the app follows the room:
 
-- **Fair / max** = team's simulated pot-share × the live pot estimate. The pot estimate
-  updates after every sale from the observed $-per-share-point rate, blended with your
-  prior until ~25 share-points have sold.
-- **Target** = fair × target margin (default 0.85) — the disciplined number to bid to.
-- Card edge color: green = top bid below target (bid!), amber = between target and fair,
-  red = above fair (walk away).
-- The **heat badge** in the header shows whether the room is paying above or below
-  pro-rata prices — if it's hot, every remaining team's fair price is higher than the
-  static spreadsheet says.
+1. **Team detection** — when the auctioneer names a team ("next up, the Broncos", "alright,
+   niners"), the app recognizes it (nicknames included) and puts it on the block itself,
+   with a 5-second undo pill. Genuinely ambiguous calls ("New York…") pop a two-button
+   choice instead of guessing.
+2. **Bid capture** — spoken amounts ("three fifty", "$425", and relative raises like
+   "bump it fifty") pop a confirm card with the price prefilled; if it hears a name it
+   knows (set member names as **aliases** per group in Setup) the group is prefilled too,
+   so confirming is one tap. Nothing is logged unconfirmed.
+3. **Sold** — hearing "sold" pops a confirm card for the top bid; one tap closes the sale,
+   clears the block, reprices the board, and goes back to listening for the next team.
+
+Backups for every step: a type-what-was-said box (same pipeline as the mic), a
+put-a-team-on-the-block picker, tap-to-block on the Best remaining strip (only while the
+block is empty, so a stray tap can't hijack live bidding), and manual bid buttons.
+
+- **Fair / max** = team's simulated pot-share × the live pot estimate (re-estimated after
+  every sale from observed prices, blended with your prior until ~25 share-points sold).
+- **Target** = fair × target margin (default 0.85) — the disciplined number.
+- Card edge: green = under target (bid), amber = between target and fair, red = walk.
+- The header heat badge (🔥/🧊) shows if the room is paying above/below pro-rata.
+
+## Fixing a badly-run auction on the fly
+
+- **Every price is editable**: Board → ✎ on any sold team → change price/owner, or Reopen.
+  On the block, ✎ corrects the top bid; tapping the stepper amount lets you type any number.
+- **Any team, any time**: Board → "▶ block"; ✕ on the block card clears a wrong team;
+  Skip and Undo cover the rest.
+- Run the listener on ONE device only (suggestions are per-device; confirmed actions sync
+  to everyone instantly).
+
+## Transcript
+
+Every finalized speech line is saved to `data/transcripts/YYYY-MM-DD.jsonl` with timestamp,
+detected amounts, guessed group, and the team on the block. The Transcript panel (Draft tab)
+shows it live on all devices — it's the audit trail for any disputed price.
+
+## Season mode
+
+Scores sync from ESPN automatically (boot + every 6h + manual button). Wins credit to
+whoever owned the team at the time — partial-stake trades included (Trade desk prices any
+slice from the live simulation). The Season tab mirrors the commissioners' net-settlement
+math; Jamie & Dylan's numbers are official.
+
+## Deploying (Railway)
+
+One service, no database add-on needed:
+
+1. Railway → New Project → Deploy from GitHub repo (`dabidfish1994/calcutta`).
+2. It auto-detects Node: `npm install && npm run build`, start = `npm start`.
+3. Add a **volume** mounted at e.g. `/data` and set env `DATA_DIR=/data` so auction state
+   survives redeploys.
+4. Generate a public domain in Settings → share that URL with Joon + Gunther.
+
+Local + `npx localtunnel --port 4600` or Tailscale also works fine for draft night.
 
 ## Updating inputs
 
 - `data/win-totals-2026.json` — sportsbook win totals (edit any time; next sync refits).
-- Valuation engine: `engine/sim.js`. Mid-season it Elo-updates ratings from real results
-  and simulates only remaining games, so trade pricing stays current automatically.
-
-## Fixing a badly-run auction on the fly
-
-First-time auctioneers jump around, misspeak prices, and re-open teams. Everything is
-correctable, live, from any device:
-
-- **Every price is editable**: Board tab → ✎ on any sold team → change price or owner,
-  or Reopen it entirely. On the Draft tab, ✎ next to the top bid corrects it; tapping
-  the stepper amount lets you type any number.
-- **Any team can be put on the block at any time**: Board tab → "▶ block" (handles an
-  auctioneer going off-order); Skip and Undo cover the rest.
-- The listener understands relative bids in context ("twenty five more", "bump it
-  fifty" resolve against the current top bid) and guesses the bidding group when it
-  hears a name it knows (set each group's member names as aliases in Setup).
-
-## Transcript
-
-Every finalized speech segment is saved server-side to `data/transcripts/YYYY-MM-DD.jsonl`
-with timestamp, detected amounts, guessed group, and the team on the block — the
-in-app Transcript panel (Draft tab) shows it live on every device, and it doubles as
-the audit trail for any disputed price.
-
-## Deploying for draft night
-
-Any Node host works (Railway / Render / Fly, one service, port from `PORT` env,
-persistent disk for `data/` recommended). Or run locally and share with
-`npx localtunnel --port 4600` / Tailscale.
+- Engine: `engine/sim.js`. Mid-season it Elo-updates ratings from real results and
+  simulates only remaining games, so valuations and trade pricing stay current.
 
 ## Notes
 
 - Payout weights are exactly the rules': 0.248% per regular-season win, 0.286% berth,
   0.5% #1 seed, 0.417% WC win, 1.25% divisional win, 3.75% conf championship, 12.5% SB.
-- Playoff berth / #1 seed detection is inferred automatically from playoff participation
-  (bye teams' first game is the divisional round).
-- Ties award no win credit (rules are silent on ties).
-- This mirrors the commissioners' tracker for our own decisions; Jamie & Dylan's numbers
-  are official.
+- Playoff berth / #1 seed detection is inferred from playoff participation (bye teams'
+  first game is the divisional round). Ties award no win credit (rules are silent).
+- Speech uses the browser's Web Speech API — no API keys; in Chrome the audio is processed
+  by Google's speech service.

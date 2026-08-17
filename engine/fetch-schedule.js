@@ -5,7 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { TEAMS } from "./teams.js";
 
-const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "data");
+const DATA_DIR = process.env.DATA_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "data");
 const YEAR = 2026;
 
 async function fetchWeek(seasontype, week) {
