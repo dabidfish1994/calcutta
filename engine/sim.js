@@ -6,12 +6,16 @@
 // mid-season repricing. Everything derives from two inputs: the schedule cache and win totals.
 import { TEAMS, TEAM_IDS, PAYOUT } from "./teams.js";
 import { blendMarket } from "./market.js";
+import { shareFromRates } from "./payouts.js";
+
+// Default profile mirrors the original rules-PDF weights.
+const PDF_PROFILE = { regWin: PAYOUT.regWin, berth: PAYOUT.playoffBerth, oneSeed: PAYOUT.oneSeed, wcWin: PAYOUT.wcWin, divWin: PAYOUT.divWin, confWin: PAYOUT.confWin, sbWin: PAYOUT.sbWin, divTitle: 0, reachDiv: 0 };
 
 const HFA = 40; // home-field advantage in Elo points (~55.7% for even teams)
 const ELO_K = 25;
 
 // Bump when the valuation schema/logic changes so cached valuation.json files recompute on deploy.
-export const VALUATION_VERSION = 2;
+export const VALUATION_VERSION = 3;
 
 export function winProb(rA, rB, hfaA) {
   return 1 / (1 + Math.pow(10, -((rA + hfaA - rB) / 400)));
@@ -114,7 +118,7 @@ function simPlayoffs(seeds, ratings, tally, rec) {
 
 // Simulate the season nSims times. actualWins/playedGames reflect what already happened;
 // futureGames are simulated. Returns per-team probabilities, expected wins, and pot shares.
-export function simulate({ ratings, futureGames, actualWins = null, nSims = 10000 }) {
+export function simulate({ ratings, futureGames, actualWins = null, nSims = 10000, profile = PDF_PROFILE }) {
   const base = () => ({ wins: 0, berth: 0, oneSeed: 0, divTitle: 0, wcWin: 0, divWin: 0, confWin: 0, sbWin: 0 });
   const tally = Object.fromEntries(TEAM_IDS.map(t => [t, base()]));
   const shareSamples = Object.fromEntries(TEAM_IDS.map(t => [t, []]));
@@ -140,10 +144,10 @@ export function simulate({ ratings, futureGames, actualWins = null, nSims = 1000
       const st = simTally[t];
       tally[t].wins += wins[t];
       for (const k of ["berth", "oneSeed", "divTitle", "wcWin", "divWin", "confWin", "sbWin"]) tally[t][k] += st[k];
-      const share =
-        PAYOUT.regWin * wins[t] + PAYOUT.playoffBerth * st.berth + PAYOUT.oneSeed * st.oneSeed +
-        PAYOUT.wcWin * st.wcWin + PAYOUT.divWin * st.divWin +
-        PAYOUT.confWin * st.confWin + PAYOUT.sbWin * st.sbWin;
+      const share = shareFromRates(profile, {
+        expWins: wins[t], pPlayoffs: st.berth, pOneSeed: st.oneSeed, pWcWin: st.wcWin,
+        pDivWin: st.divWin, pConfWin: st.confWin, pSbWin: st.sbWin, pDivTitle: st.divTitle
+      });
       shareSamples[t].push(share);
     }
   }
@@ -182,7 +186,7 @@ export function simulate({ ratings, futureGames, actualWins = null, nSims = 1000
 
 // Full pipeline from raw inputs. Played games feed both Elo updates and banked wins;
 // remaining games get simulated. Preseason this is simply the whole schedule.
-export function valuate(scheduleGames, winTotals, nSims = 10000, marketOdds = null) {
+export function valuate(scheduleGames, winTotals, nSims = 10000, marketOdds = null, profile = PDF_PROFILE) {
   const regular = scheduleGames.filter(g => g.seasontype === 2);
   const played = regular.filter(g => g.final && g.homeScore != null);
   const future = regular.filter(g => !g.final);
@@ -194,14 +198,14 @@ export function valuate(scheduleGames, winTotals, nSims = 10000, marketOdds = nu
     else if (g.awayScore > g.homeScore) actualWins[g.away]++;
     else { actualWins[g.home] += 0.5; actualWins[g.away] += 0.5; }
   }
-  const sim = simulate({ ratings, futureGames: future, actualWins, nSims });
+  const sim = simulate({ ratings, futureGames: future, actualWins, nSims, profile });
   let teams = sim.teams;
   let marketWeight = 0;
   if (marketOdds) {
     for (const t of TEAM_IDS) if (marketOdds[t]) marketOdds[t].winTotal = winTotals[t];
-    const blended = blendMarket(sim.teams, marketOdds, played.length);
+    const blended = blendMarket(sim.teams, marketOdds, played.length, profile);
     teams = blended.teams;
     marketWeight = blended.marketWeight;
   }
-  return { version: VALUATION_VERSION, computedAt: new Date().toISOString(), gamesPlayed: played.length, ratings, teams, matchups: sim.matchups, marketWeight };
+  return { version: VALUATION_VERSION, computedAt: new Date().toISOString(), gamesPlayed: played.length, ratings, teams, matchups: sim.matchups, marketWeight, profile: profile.key || "rules-pdf" };
 }

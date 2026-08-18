@@ -893,9 +893,9 @@ function Odds({ view }) {
   return (
     <div className="pad">
       <p className="dim">
-        Sportsbook futures (de-vigged) blended into the sim at <b>{wPct}% market weight</b> — the weight
-        decays automatically as real games are played. ⚡ = market and model disagree; that's where auction
-        edges live.
+        Priced under: <b>{view.scoringProfile?.label}</b>. Sportsbook futures (de-vigged) blended into the
+        sim at <b>{wPct}% market weight</b> — the weight decays automatically as real games are played.
+        ⚡ = market and model disagree; that's where auction edges live.
       </p>
       <div className="tablewrap"><table className="tbl">
         <thead><tr>
@@ -1090,6 +1090,12 @@ function Setup({ view }) {
       <h2>Our group</h2>
       <select value={state.config.ourGroupId} onChange={e => act("setOurGroup", { groupId: e.target.value })}>
         {state.config.groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+      </select>
+
+      <h2>Scoring profile</h2>
+      <p className="dim">Which payout rules every valuation and fair price is computed against. Switching re-runs the whole simulation (~30s).</p>
+      <select value={view.scoringProfile?.active} onChange={e => act("setScoringProfile", { profile: e.target.value })}>
+        {Object.entries(view.scoringProfile?.options || {}).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
       </select>
 
       <h2>Pot & discipline</h2>

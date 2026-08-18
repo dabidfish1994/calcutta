@@ -7,15 +7,16 @@ import http from "http";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { TEAMS, TEAM_IDS, PAYOUT } from "../engine/teams.js";
+import { TEAMS, TEAM_IDS } from "../engine/teams.js";
 import { valuate, VALUATION_VERSION } from "../engine/sim.js";
 import { fetchAndCache } from "../engine/fetch-schedule.js";
+import { loadProfiles, resolveProfile } from "../engine/payouts.js";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 // Seed a fresh DATA_DIR (e.g. an empty Railway volume) from the repo's data folder.
-for (const f of ["win-totals-2026.json", "market-odds-2026.json"]) {
+for (const f of ["win-totals-2026.json", "market-odds-2026.json", "payout-profiles-2026.json"]) {
   const src = path.join(ROOT, "data", f), dst = path.join(DATA_DIR, f);
   if (!fs.existsSync(dst) && fs.existsSync(src)) fs.copyFileSync(src, dst);
 }
@@ -64,6 +65,8 @@ let valuation = fs.existsSync(DATA("valuation.json"))
   ? JSON.parse(fs.readFileSync(DATA("valuation.json"), "utf8"))
   : null;
 
+let profiles = loadProfiles(DATA_DIR);
+
 let saveTimer = null;
 function persist() {
   clearTimeout(saveTimer);
@@ -73,26 +76,35 @@ function persist() {
 // ---------- derived: earnings ledger from real results ----------
 function payoutEvents() {
   if (!schedule) return [];
+  const p = resolveProfile(profiles);
   const events = [];
+  const push = (type, team, ts, credit) => { if (credit > 0) events.push({ type, team, ts, credit }); };
   const finals = schedule.games.filter(g => g.final && g.homeScore != null);
   const firstPlayoff = {}; // team -> earliest playoff week seen
   for (const g of finals) {
     const winner = g.homeScore > g.awayScore ? g.home : g.awayScore > g.homeScore ? g.away : null;
     if (g.seasontype === 2) {
-      if (winner) events.push({ type: "regWin", team: winner, ts: g.date, credit: PAYOUT.regWin });
+      if (winner) push("regWin", winner, g.date, p.regWin);
     } else if (g.seasontype === 3) {
       for (const t of [g.home, g.away]) {
         if (!(t in firstPlayoff) || g.week < firstPlayoff[t].week) firstPlayoff[t] = { week: g.week, ts: g.date };
       }
-      const credit = { 1: PAYOUT.wcWin, 2: PAYOUT.divWin, 3: PAYOUT.confWin, 5: PAYOUT.sbWin }[g.week];
-      const type = { 1: "wcWin", 2: "divWin", 3: "confWin", 5: "sbWin" }[g.week];
-      if (winner && credit) events.push({ type, team: winner, ts: g.date, credit });
+      if (g.week === 1) {
+        push("divTitle", g.home, g.date, p.divTitle); // WC hosts are division winners (seeds 2-4)
+        if (winner) { push("wcWin", winner, g.date, p.wcWin); push("reachDiv", winner, g.date, p.reachDiv); }
+      } else if (g.week === 2 && winner) push("divWin", winner, g.date, p.divWin);
+      else if (g.week === 3 && winner) push("confWin", winner, g.date, p.confWin);
+      else if (g.week === 5 && winner) push("sbWin", winner, g.date, p.sbWin);
     }
   }
   for (const [team, info] of Object.entries(firstPlayoff)) {
-    events.push({ type: "playoffBerth", team, ts: info.ts, credit: PAYOUT.playoffBerth });
-    // Teams whose first playoff game is the divisional round had the bye = #1 seed.
-    if (info.week === 2) events.push({ type: "oneSeed", team, ts: info.ts, credit: PAYOUT.oneSeed });
+    push("berth", team, info.ts, p.berth);
+    // Teams whose first playoff game is the divisional round had the bye = #1 seed = a division winner.
+    if (info.week === 2) {
+      push("oneSeed", team, info.ts, p.oneSeed);
+      push("divTitle", team, info.ts, p.divTitle);
+      push("reachDiv", team, info.ts, p.reachDiv);
+    }
   }
   return events.sort((a, b) => a.ts.localeCompare(b.ts));
 }
@@ -172,7 +184,8 @@ function view() {
       gamesPlayed: valuation.gamesPlayed,
       teams: valuation.teams,
       matchups: valuation.matchups || null,
-      marketWeight: valuation.marketWeight ?? 0
+      marketWeight: valuation.marketWeight ?? 0,
+      profile: valuation.profile || null
     } : null,
     repricing: rp,
     potForSettlement,
@@ -180,7 +193,8 @@ function view() {
     summaries: gs.groups,
     earnedByTeam: gs.earnedByTeam,
     scheduleFetchedAt: schedule?.fetchedAt || null,
-    undoLabel: undoStack.length ? undoStack[undoStack.length - 1].label ?? null : null
+    undoLabel: undoStack.length ? undoStack[undoStack.length - 1].label ?? null : null,
+    scoringProfile: { active: profiles.active, label: profiles.profiles[profiles.active]?.label || profiles.active, options: Object.fromEntries(Object.entries(profiles.profiles).map(([k, v]) => [k, v.label])) }
   };
 }
 
@@ -208,7 +222,7 @@ async function syncScores({ force = false } = {}) {
         const winTotals = JSON.parse(fs.readFileSync(DATA("win-totals-2026.json"), "utf8"));
         let marketOdds = null;
         try { marketOdds = JSON.parse(fs.readFileSync(DATA("market-odds-2026.json"), "utf8")); } catch {}
-        valuation = valuate(schedule.games, winTotals, 10000, marketOdds);
+        valuation = valuate(schedule.games, winTotals, 10000, marketOdds, resolveProfile(profiles));
         fs.writeFileSync(DATA("valuation.json"), JSON.stringify(valuation, null, 1));
       } finally {
         revaluing = false;
@@ -259,6 +273,12 @@ const actions = {
   },
   setPaused({ paused }) {
     state.auction.paused = !!paused;
+  },
+  setScoringProfile({ profile }) {
+    if (!profiles.profiles[profile]) return { error: "Unknown scoring profile." };
+    profiles.active = profile;
+    fs.writeFileSync(DATA("payout-profiles-2026.json"), JSON.stringify(profiles, null, 1));
+    syncScores({ force: true }); // revalue under the new rules (async; broadcasts when done)
   },
   blockTeam({ team }) {
     if (state.auction.paused) return { error: "Draft is paused — resume first." };

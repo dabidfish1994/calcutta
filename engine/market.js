@@ -6,6 +6,9 @@
 // information ratings flatten (QB ceiling, variance, path). Market weight decays as real
 // games are played, because preseason futures go stale while the sim keeps learning.
 import { TEAMS, TEAM_IDS, PAYOUT } from "./teams.js";
+import { shareFromRates } from "./payouts.js";
+
+const PDF_PROFILE = { regWin: PAYOUT.regWin, berth: PAYOUT.playoffBerth, oneSeed: PAYOUT.oneSeed, wcWin: PAYOUT.wcWin, divWin: PAYOUT.divWin, confWin: PAYOUT.confWin, sbWin: PAYOUT.sbWin, divTitle: 0, reachDiv: 0 };
 
 export const americanToProb = o => (o < 0 ? -o / (-o + 100) : 100 / (o + 100));
 
@@ -21,7 +24,7 @@ function renorm(map, teams, target) {
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 
-export function blendMarket(simTeams, marketOdds, gamesPlayed) {
+export function blendMarket(simTeams, marketOdds, gamesPlayed, profile = PDF_PROFILE) {
   // 70% market preseason, decaying linearly to 0 as the 272-game season completes.
   const wM = 0.7 * Math.max(0, (272 - gamesPlayed) / 272);
 
@@ -72,10 +75,10 @@ export function blendMarket(simTeams, marketOdds, gamesPlayed) {
   const out = {};
   for (const t of TEAM_IDS) {
     const s = simTeams[t];
-    const share =
-      PAYOUT.regWin * s.expWins + PAYOUT.playoffBerth * pPl[t] + PAYOUT.oneSeed * pOne[t] +
-      PAYOUT.wcWin * pWc[t] + PAYOUT.divWin * pDivRound[t] +
-      PAYOUT.confWin * Math.max(pConf[t], pSb[t]) + PAYOUT.sbWin * pSb[t];
+    const share = shareFromRates(profile, {
+      expWins: s.expWins, pPlayoffs: pPl[t], pOneSeed: pOne[t], pWcWin: pWc[t],
+      pDivWin: pDivRound[t], pConfWin: Math.max(pConf[t], pSb[t]), pSbWin: pSb[t], pDivTitle: pDivTitle[t]
+    });
     out[t] = {
       ...s,
       shareSim: s.share,

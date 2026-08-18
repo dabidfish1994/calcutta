@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { fetchAndCache } from "./fetch-schedule.js";
 import { valuate } from "./sim.js";
 import { TEAMS, TEAM_IDS } from "./teams.js";
+import { loadProfiles, resolveProfile } from "./payouts.js";
 
 const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "data");
 const schedPath = path.join(DATA_DIR, "schedule-2026.json");
@@ -16,7 +17,10 @@ const winTotals = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "win-totals-202
 let marketOdds = null;
 try { marketOdds = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "market-odds-2026.json"), "utf8")); } catch {}
 
-const val = valuate(sched.games, winTotals, 20000, marketOdds);
+const profiles = loadProfiles(DATA_DIR);
+const profile = resolveProfile(profiles, process.argv.find(a => a.startsWith("--profile="))?.split("=")[1]);
+console.log(`\nScoring profile: ${profile.label || profile.key}`);
+const val = valuate(sched.games, winTotals, 20000, marketOdds, profile);
 fs.writeFileSync(path.join(DATA_DIR, "valuation.json"), JSON.stringify(val, null, 1));
 
 const rows = TEAM_IDS.map(t => ({ t, ...val.teams[t] })).sort((a, b) => b.share - a.share);

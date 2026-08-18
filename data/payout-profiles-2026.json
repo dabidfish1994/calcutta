@@ -1,0 +1,18 @@
+{
+  "_source": "Two scoring worlds. 'rules-pdf' = the official Cardinal-Calcutta-Rules.pdf pay-per-win structure. 'platform' = the live Calcutta Time league config (read from calcuttatime.com league settings, Aug 17 2026): playoff-ladder only, NO per-win scoring. Weights are % of pot per occurrence. reachDiv applies to reaching the divisional round (WC winners + bye teams).",
+  "active": "platform",
+  "profiles": {
+    "rules-pdf": {
+      "label": "Official rules PDF (pay-per-win)",
+      "regWin": 0.248, "berth": 0.286, "oneSeed": 0.5, "wcWin": 0.417,
+      "divWin": 1.25, "confWin": 3.75, "sbWin": 12.5,
+      "divTitle": 0, "reachDiv": 0
+    },
+    "platform": {
+      "label": "Calcutta Time league (playoff ladder)",
+      "regWin": 0, "berth": 1.14, "oneSeed": 0, "wcWin": 0,
+      "divWin": 4, "confWin": 8, "sbWin": 30,
+      "divTitle": 0.75, "reachDiv": 2
+    }
+  }
+}
