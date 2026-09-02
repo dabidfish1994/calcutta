@@ -227,7 +227,11 @@ async function syncScores({ force = false } = {}) {
     const before = schedule ? schedule.games.filter(g => g.final).length : -1;
     schedule = await fetchAndCache();
     const after = schedule.games.filter(g => g.final).length;
-    const stale = !valuation || valuation.version !== VALUATION_VERSION;
+    // Recompute when the code version OR any valuation input (lines, odds, active profile) changed.
+    const inputsHash = ["win-totals-2026.json", "market-odds-2026.json", "payout-profiles-2026.json"]
+      .map(f => { try { return fs.readFileSync(DATA(f), "utf8"); } catch { return ""; } })
+      .reduce((h, s) => { for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }, 7);
+    const stale = !valuation || valuation.version !== VALUATION_VERSION || valuation.inputsHash !== inputsHash;
     if ((after !== before || force || stale) && !revaluing) {
       revaluing = true;
       try {
@@ -235,6 +239,7 @@ async function syncScores({ force = false } = {}) {
         let marketOdds = null;
         try { marketOdds = JSON.parse(fs.readFileSync(DATA("market-odds-2026.json"), "utf8")); } catch {}
         valuation = valuate(schedule.games, winTotals, 10000, marketOdds, resolveProfile(profiles));
+        valuation.inputsHash = inputsHash;
         fs.writeFileSync(DATA("valuation.json"), JSON.stringify(valuation, null, 1));
       } finally {
         revaluing = false;
