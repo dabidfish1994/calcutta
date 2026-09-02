@@ -15,10 +15,22 @@ import { loadProfiles, resolveProfile } from "../engine/payouts.js";
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
-// Seed a fresh DATA_DIR (e.g. an empty Railway volume) from the repo's data folder.
-for (const f of ["win-totals-2026.json", "market-odds-2026.json", "payout-profiles-2026.json"]) {
-  const src = path.join(ROOT, "data", f), dst = path.join(DATA_DIR, f);
-  if (!fs.existsSync(dst) && fs.existsSync(src)) fs.copyFileSync(src, dst);
+// Config files are repo-managed: every deploy refreshes the volume's copies so updated lines
+// and payout weights actually reach production. Only the user's chosen `active` profile persists.
+if (DATA_DIR !== path.join(ROOT, "data")) {
+  for (const f of ["win-totals-2026.json", "market-odds-2026.json"]) {
+    const src = path.join(ROOT, "data", f), dst = path.join(DATA_DIR, f);
+    if (fs.existsSync(src)) fs.copyFileSync(src, dst);
+  }
+  const pSrc = path.join(ROOT, "data", "payout-profiles-2026.json"), pDst = path.join(DATA_DIR, "payout-profiles-2026.json");
+  if (fs.existsSync(pSrc)) {
+    const fresh = JSON.parse(fs.readFileSync(pSrc, "utf8"));
+    try {
+      const prev = JSON.parse(fs.readFileSync(pDst, "utf8"));
+      if (prev.active && fresh.profiles[prev.active]) fresh.active = prev.active;
+    } catch {}
+    fs.writeFileSync(pDst, JSON.stringify(fresh, null, 1));
+  }
 }
 const DATA = p => path.join(DATA_DIR, p);
 const PORT = process.env.PORT || 4600;
