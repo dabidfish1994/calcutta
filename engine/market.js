@@ -8,7 +8,7 @@
 import { TEAMS, TEAM_IDS, PAYOUT } from "./teams.js";
 import { shareFromRates } from "./payouts.js";
 
-const PDF_PROFILE = { regWin: PAYOUT.regWin, berth: PAYOUT.playoffBerth, oneSeed: PAYOUT.oneSeed, wcWin: PAYOUT.wcWin, divWin: PAYOUT.divWin, confWin: PAYOUT.confWin, sbWin: PAYOUT.sbWin, divTitle: 0, reachDiv: 0 };
+const PDF_PROFILE = { regWin: PAYOUT.regWin, berth: PAYOUT.playoffBerth, oneSeed: 0, wcWin: 0, reachDiv: PAYOUT.wcWin, divWin: PAYOUT.divWin, confWin: PAYOUT.confWin, sbWin: PAYOUT.sbWin, divTitle: 0 };
 
 export const americanToProb = o => (o < 0 ? -o / (-o + 100) : 100 / (o + 100));
 

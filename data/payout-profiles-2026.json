@@ -1,18 +1,24 @@
 {
-  "_source": "Two scoring worlds. 'rules-pdf' = the official Cardinal-Calcutta-Rules.pdf pay-per-win structure. 'platform' = the live Calcutta Time league config (read from calcuttatime.com league settings, Aug 17 2026): playoff-ladder only, NO per-win scoring. Weights are % of pot per occurrence. reachDiv applies to reaching the divisional round (WC winners + bye teams).",
-  "active": "platform",
+  "_source": "Scoring profiles. 'rules-pdf' = the CURRENT official Cardinal-Calcutta-Rules.pdf (revised Aug 2026): 74% regular season, compressed playoff ladder, no #1-seed bonus, playoff bye credited as an automatic Wild Card win (so reachDiv = WC winners + bye teams = 8 credits/yr), max 16% per team. 'rules-pdf-v1' = the superseded original. 'platform' = Calcutta Time's own default config (NOT used for scoring per Dylan; kept for reference). Weights are % of pot per occurrence.",
+  "active": "rules-pdf",
   "profiles": {
     "rules-pdf": {
-      "label": "Official rules PDF (pay-per-win)",
+      "label": "Official rules PDF — revised Aug 2026 (74% per-win)",
+      "regWin": 0.272, "berth": 0.325, "oneSeed": 0, "wcWin": 0,
+      "reachDiv": 0.55, "divWin": 1.25, "confWin": 2.8, "sbWin": 6.45,
+      "divTitle": 0
+    },
+    "rules-pdf-v1": {
+      "label": "Original rules PDF (superseded) — 67.5% per-win",
       "regWin": 0.248, "berth": 0.286, "oneSeed": 0.5, "wcWin": 0.417,
-      "divWin": 1.25, "confWin": 3.75, "sbWin": 12.5,
-      "divTitle": 0, "reachDiv": 0
+      "reachDiv": 0, "divWin": 1.25, "confWin": 3.75, "sbWin": 12.5,
+      "divTitle": 0
     },
     "platform": {
-      "label": "Calcutta Time league (playoff ladder)",
+      "label": "Calcutta Time default config (not used for scoring)",
       "regWin": 0, "berth": 1.14, "oneSeed": 0, "wcWin": 0,
-      "divWin": 4, "confWin": 8, "sbWin": 30,
-      "divTitle": 0.75, "reachDiv": 2
+      "reachDiv": 2, "divWin": 4, "confWin": 8, "sbWin": 30,
+      "divTitle": 0.75
     }
   }
 }

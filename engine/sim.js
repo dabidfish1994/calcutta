@@ -8,14 +8,15 @@ import { TEAMS, TEAM_IDS, PAYOUT } from "./teams.js";
 import { blendMarket } from "./market.js";
 import { shareFromRates } from "./payouts.js";
 
-// Default profile mirrors the original rules-PDF weights.
-const PDF_PROFILE = { regWin: PAYOUT.regWin, berth: PAYOUT.playoffBerth, oneSeed: PAYOUT.oneSeed, wcWin: PAYOUT.wcWin, divWin: PAYOUT.divWin, confWin: PAYOUT.confWin, sbWin: PAYOUT.sbWin, divTitle: 0, reachDiv: 0 };
+// Default profile mirrors the current rules PDF: the bye is an automatic WC win, so the
+// WC weight rides on reachDiv (WC winners + bye teams) rather than on WC games alone.
+const PDF_PROFILE = { regWin: PAYOUT.regWin, berth: PAYOUT.playoffBerth, oneSeed: 0, wcWin: 0, reachDiv: PAYOUT.wcWin, divWin: PAYOUT.divWin, confWin: PAYOUT.confWin, sbWin: PAYOUT.sbWin, divTitle: 0 };
 
 const HFA = 40; // home-field advantage in Elo points (~55.7% for even teams)
 const ELO_K = 25;
 
 // Bump when the valuation schema/logic changes so cached valuation.json files recompute on deploy.
-export const VALUATION_VERSION = 3;
+export const VALUATION_VERSION = 4;
 
 export function winProb(rA, rB, hfaA) {
   return 1 / (1 + Math.pow(10, -((rA + hfaA - rB) / 400)));

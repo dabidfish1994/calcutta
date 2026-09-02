@@ -36,13 +36,14 @@ export const TEAMS = {
 
 export const TEAM_IDS = Object.keys(TEAMS);
 
-// Official Cardinal Calcutta payout weights, % of pot per occurrence (Section 4 of the rules).
+// Official Cardinal Calcutta payout weights, % of pot per occurrence (Section 4, revised Aug 2026).
+// No #1-seed bonus; a playoff bye is credited as an automatic Wild Card win (8 WC credits per season).
 export const PAYOUT = {
-  regWin: 0.248,
-  playoffBerth: 0.286,
-  oneSeed: 0.5,
-  wcWin: 0.417,
+  regWin: 0.272,
+  playoffBerth: 0.325,
+  oneSeed: 0,
+  wcWin: 0.55,   // applies to WC-game winners AND the two bye teams
   divWin: 1.25,
-  confWin: 3.75,
-  sbWin: 12.5
+  confWin: 2.8,
+  sbWin: 6.45
 };

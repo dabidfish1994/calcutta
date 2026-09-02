@@ -102,9 +102,12 @@ Local + `npx localtunnel --port 4600` or Tailscale also works fine for draft nig
 
 ## Notes
 
-- Payout weights are exactly the rules': 0.248% per regular-season win, 0.286% berth,
-  0.5% #1 seed, 0.417% WC win, 1.25% divisional win, 3.75% conf championship, 12.5% SB.
-- Playoff berth / #1 seed detection is inferred from playoff participation (bye teams'
-  first game is the divisional round). Ties award no win credit (rules are silent).
+- Payout weights follow the revised rules (Aug 2026): 0.272% per regular-season win (74%
+  of pot), 0.325% berth, 0.55% Wild Card win — credited to the 6 WC winners AND the 2 bye
+  teams — 1.25% divisional win, 2.8% conf championship, 6.45% SB. No #1-seed bonus; max
+  16% per team. Scoring profiles live in `data/payout-profiles-2026.json` (Setup tab
+  switches; the superseded v1 weights and Calcutta Time's default config are kept for reference).
+- Playoff berth / bye detection is inferred from playoff participation (bye teams' first
+  game is the divisional round). Ties award no win credit (rules are silent).
 - Speech uses the browser's Web Speech API — no API keys; in Chrome the audio is processed
   by Google's speech service.
