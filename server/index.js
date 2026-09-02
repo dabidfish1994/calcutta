@@ -143,7 +143,9 @@ function repricing() {
   const observedRate = soldShare > 0 ? spent / soldShare : priorRate;
   const alpha = Math.min(1, soldShare / 25); // trust the room once ~25 share-points have sold
   const rate = alpha * observedRate + (1 - alpha) * priorRate;
-  const potEstimate = spent + (totalShare - soldShare) * rate;
+  // The pot can never exceed what the groups are allowed to commit in total.
+  const maxPot = state.config.groups.reduce((s, g) => s + (Number(g.budget) || 0), 0) || Infinity;
+  const potEstimate = Math.min(spent + (totalShare - soldShare) * rate, maxPot);
   const heat = observedRate / priorRate;
   const fair = Object.fromEntries(TEAM_IDS.map(t => [t, (shares[t] * potEstimate) / totalShare]));
   return { potEstimate, spent, soldShare, heat: soldShare > 0 ? heat : 1, rate, fair };
