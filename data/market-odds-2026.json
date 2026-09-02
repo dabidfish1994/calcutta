@@ -1,35 +1,163 @@
 {
-  "_source": "American odds, consensus mid-Aug 2026. sb: ESPN Super Bowl LXI futures (Aug 16). playoff: Yahoo make-the-playoffs yes prices. division: sportsbrackets.net division winners (Jul 25). Edit freely — the engine de-vigs and re-blends on next sync/boot.",
-  "ARI": { "sb": 50000, "playoff": 2000, "division": 10000 },
-  "ATL": { "sb": 13000, "playoff": 240, "division": 425 },
-  "BAL": { "sb": 1000, "playoff": -375, "division": -115 },
-  "BUF": { "sb": 1000, "playoff": -350, "division": -125 },
-  "CAR": { "sb": 9000, "playoff": 225, "division": 310 },
-  "CHI": { "sb": 2400, "playoff": 100, "division": 305 },
-  "CIN": { "sb": 2000, "playoff": -155, "division": 194 },
-  "CLE": { "sb": 20000, "playoff": 450, "division": 2100 },
-  "DAL": { "sb": 2500, "playoff": 100, "division": 235 },
-  "DEN": { "sb": 2000, "playoff": -140, "division": 225 },
-  "DET": { "sb": 1900, "playoff": -220, "division": 180 },
-  "GB":  { "sb": 1800, "playoff": -160, "division": 215 },
-  "HOU": { "sb": 1800, "playoff": -140, "division": 110 },
-  "IND": { "sb": 6000, "playoff": 140, "division": 380 },
-  "JAX": { "sb": 3000, "playoff": -135, "division": 245 },
-  "KC":  { "sb": 1600, "playoff": -210, "division": 160 },
-  "LV":  { "sb": 15000, "playoff": 550, "division": 2000 },
-  "LAC": { "sb": 1700, "playoff": -210, "division": 190 },
-  "LAR": { "sb": 550, "playoff": -325, "division": 100 },
-  "MIA": { "sb": 35000, "playoff": 1100, "division": 4000 },
-  "MIN": { "sb": 5000, "playoff": 170, "division": 510 },
-  "NE":  { "sb": 1600, "playoff": -185, "division": 120 },
-  "NO":  { "sb": 9000, "playoff": 195, "division": 265 },
-  "NYG": { "sb": 7000, "playoff": 260, "division": 600 },
-  "NYJ": { "sb": 20000, "playoff": 800, "division": 1900 },
-  "PHI": { "sb": 1600, "playoff": -200, "division": 115 },
-  "PIT": { "sb": 5000, "playoff": 180, "division": 510 },
-  "SF":  { "sb": 1900, "playoff": -145, "division": 305 },
-  "SEA": { "sb": 1100, "playoff": -275, "division": 205 },
-  "TB":  { "sb": 5500, "playoff": 125, "division": 164 },
-  "TEN": { "sb": 13000, "playoff": 325, "division": 800 },
-  "WSH": { "sb": 6000, "playoff": 225, "division": 460 }
+ "_source": "American odds, DraftKings snapshots relayed via VegasInsider/SI/ESPN. sb: Super Bowl LXI futures (Aug 31 2026). playoff: to-make-playoffs Yes prices (Aug 28 2026). division: division-winner prices (Sep 1 2026). Refreshed Sep 2 2026; the engine de-vigs and re-blends on next sync/boot.",
+ "ARI": {
+  "sb": 50000,
+  "playoff": 2000,
+  "division": 10000
+ },
+ "ATL": {
+  "sb": 13000,
+  "playoff": 240,
+  "division": 400
+ },
+ "BAL": {
+  "sb": 1000,
+  "playoff": -390,
+  "division": 102
+ },
+ "BUF": {
+  "sb": 1000,
+  "playoff": -320,
+  "division": -136
+ },
+ "CAR": {
+  "sb": 9000,
+  "playoff": 220,
+  "division": 350
+ },
+ "CHI": {
+  "sb": 2400,
+  "playoff": -105,
+  "division": 305
+ },
+ "CIN": {
+  "sb": 1800,
+  "playoff": -200,
+  "division": 164
+ },
+ "CLE": {
+  "sb": 20000,
+  "playoff": 570,
+  "division": 2100
+ },
+ "DAL": {
+  "sb": 2500,
+  "playoff": -105,
+  "division": 184
+ },
+ "DEN": {
+  "sb": 2000,
+  "playoff": -140,
+  "division": 210
+ },
+ "DET": {
+  "sb": 1900,
+  "playoff": -220,
+  "division": 175
+ },
+ "GB": {
+  "sb": 2000,
+  "playoff": -150,
+  "division": 240
+ },
+ "HOU": {
+  "sb": 1800,
+  "playoff": -180,
+  "division": 105
+ },
+ "IND": {
+  "sb": 6000,
+  "playoff": 170,
+  "division": 425
+ },
+ "JAX": {
+  "sb": 3000,
+  "playoff": 105,
+  "division": 245
+ },
+ "KC": {
+  "sb": 1600,
+  "playoff": -205,
+  "division": 170
+ },
+ "LAC": {
+  "sb": 1700,
+  "playoff": -168,
+  "division": 190
+ },
+ "LAR": {
+  "sb": 500,
+  "playoff": -460,
+  "division": -105
+ },
+ "LV": {
+  "sb": 15000,
+  "playoff": 600,
+  "division": 2000
+ },
+ "MIA": {
+  "sb": 35000,
+  "playoff": 1400,
+  "division": 4000
+ },
+ "MIN": {
+  "sb": 5000,
+  "playoff": 154,
+  "division": 450
+ },
+ "NE": {
+  "sb": 1800,
+  "playoff": -225,
+  "division": 125
+ },
+ "NO": {
+  "sb": 9000,
+  "playoff": 184,
+  "division": 255
+ },
+ "NYG": {
+  "sb": 7000,
+  "playoff": 255,
+  "division": 600
+ },
+ "NYJ": {
+  "sb": 20000,
+  "playoff": 690,
+  "division": 1900
+ },
+ "PHI": {
+  "sb": 1700,
+  "playoff": -186,
+  "division": 122
+ },
+ "PIT": {
+  "sb": 5000,
+  "playoff": 140,
+  "division": 510
+ },
+ "SEA": {
+  "sb": 1200,
+  "playoff": -225,
+  "division": 215
+ },
+ "SF": {
+  "sb": 1900,
+  "playoff": -146,
+  "division": 305
+ },
+ "TB": {
+  "sb": 5500,
+  "playoff": 130,
+  "division": 164
+ },
+ "TEN": {
+  "sb": 13000,
+  "playoff": 340,
+  "division": 800
+ },
+ "WSH": {
+  "sb": 6000,
+  "playoff": 230,
+  "division": 600
+ }
 }
