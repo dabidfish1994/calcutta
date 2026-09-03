@@ -183,6 +183,77 @@ function groupSummaries(events, pot) {
   return { groups: out, earnedByTeam };
 }
 
+
+// ---------- derived: week-by-week season view ----------
+const WEEK_LABEL = (st, wk) => (st === 2 ? `Week ${wk}` : { 1: "Wild Card", 2: "Divisional", 3: "Conf. Champ.", 5: "Super Bowl" }[wk] || `Playoffs ${wk}`);
+function seasonSummary(events, pot) {
+  if (!schedule) return null;
+  const p = resolveProfile(profiles);
+  const creditByGame = {};
+  // Attribute each event to a game id when it came from a game result.
+  const games = [...schedule.games].sort((a, b) => a.date.localeCompare(b.date));
+  const weeksMap = new Map();
+  for (const g of games) {
+    const key = `${g.seasontype}-${g.week}`;
+    if (!weeksMap.has(key)) weeksMap.set(key, { key, seasontype: g.seasontype, week: g.week, label: WEEK_LABEL(g.seasontype, g.week), games: [], start: g.date });
+    const winner = g.final && g.homeScore != null ? (g.homeScore > g.awayScore ? g.home : g.awayScore > g.homeScore ? g.away : null) : null;
+    let credit = 0;
+    if (winner) {
+      if (g.seasontype === 2) credit = p.regWin;
+      else credit = ({ 1: p.wcWin + p.reachDiv, 2: p.divWin, 3: p.confWin, 5: p.sbWin })[g.week] || 0;
+    }
+    weeksMap.get(key).games.push({
+      id: g.id, date: g.date, home: g.home, away: g.away, homeScore: g.homeScore, awayScore: g.awayScore,
+      final: !!g.final, winner, credit,
+      homeOwners: ownershipAt(g.home, g.date), awayOwners: ownershipAt(g.away, g.date)
+    });
+  }
+  const weeks = [...weeksMap.values()];
+  // current week = first week with an unfinished game (or the last week)
+  const cur = weeks.find(w => w.games.some(g => !g.final)) || weeks[weeks.length - 1];
+  // per-group earnings by week, from the payout events (dated by game)
+  const byGroupWeek = {};
+  for (const ev of events) {
+    const w = weeks.find(w => w.games.some(g => g.date === ev.ts && (g.home === ev.team || g.away === ev.team)));
+    const key = w ? w.key : "other";
+    for (const [gid, pct] of Object.entries(ownershipAt(ev.team, ev.ts))) {
+      (byGroupWeek[gid] ??= {});
+      byGroupWeek[gid][key] = (byGroupWeek[gid][key] || 0) + (ev.credit * pct) / 100 / 100 * pot;
+    }
+  }
+  // records + banked per team
+  const teamRecord = Object.fromEntries(TEAM_IDS.map(t => [t, { w: 0, l: 0, t: 0 }]));
+  for (const g of games) {
+    if (!(g.final && g.seasontype === 2 && g.homeScore != null)) continue;
+    if (g.homeScore > g.awayScore) { teamRecord[g.home].w++; teamRecord[g.away].l++; }
+    else if (g.awayScore > g.homeScore) { teamRecord[g.away].w++; teamRecord[g.home].l++; }
+    else { teamRecord[g.home].t++; teamRecord[g.away].t++; }
+  }
+  return { currentWeek: cur?.key || null, weeks, byGroupWeek, teamRecord };
+}
+
+// Projected season-end earnings: banked (historical ownership) + future share × current ownership × pot.
+function projections(gs, pot) {
+  const now = new Date().toISOString();
+  const out = {};
+  for (const g of state.config.groups) out[g.id] = { banked: gs.groups[g.id].earnedDollars, future: 0 };
+  const perTeam = {};
+  for (const t of Object.keys(state.auction.sales)) {
+    const total = valuation?.teams?.[t]?.share ?? 0;
+    const future = Math.max(0, total - (gs.earnedByTeam[t] || 0));
+    perTeam[t] = { totalShare: total, bankedShare: gs.earnedByTeam[t] || 0, futureShare: future };
+    for (const [gid, pct] of Object.entries(ownershipAt(t, now))) {
+      if (out[gid]) out[gid].future += (future / 100) * pot * (pct / 100);
+    }
+  }
+  for (const g of state.config.groups) {
+    const o = out[g.id]; const spent = gs.groups[g.id].spent; const cash = gs.groups[g.id].tradeCash;
+    o.projectedEarned = o.banked + o.future;
+    o.projectedNet = o.projectedEarned - spent + cash;
+  }
+  return { groups: out, teams: perTeam };
+}
+
 function view() {
   const rp = repricing();
   const events = payoutEvents();
@@ -190,7 +261,11 @@ function view() {
   const potForSettlement = state.auction.phase === "done" ? finalPot : rp.potEstimate;
   // Every dollar figure on screen derives from the SAME pot, or the tables disagree.
   const gs = groupSummaries(events, potForSettlement);
+  const season = seasonSummary(events, potForSettlement);
+  const proj = projections(gs, potForSettlement);
   return {
+    season,
+    projections: proj,
     state,
     teams: TEAMS,
     valuation: valuation ? {
@@ -254,7 +329,7 @@ async function syncScores({ force = false } = {}) {
     return { ok: false, error: e.message };
   }
 }
-setInterval(() => syncScores(), 6 * 3600 * 1000);
+setInterval(() => syncScores(), 60 * 60 * 1000); // hourly during the season
 syncScores(); // on boot: fresh schedule + valuation, zero manual steps
 
 // ---------- actions ----------

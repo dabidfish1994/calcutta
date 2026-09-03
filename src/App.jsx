@@ -49,13 +49,14 @@ const TABS = ["Draft", "Board", "Odds", "Season", "Trades", "Setup"];
 const TAB_MOJI = { Draft: "🔨", Board: "📋", Odds: "🎲", Season: "🏈", Trades: "🤝", Setup: "⚙️" };
 
 export default function App() {
-  const [tab, setTab] = useState("Draft");
+  const [tabSel, setTab] = useState(null);
   const [lines, setLines] = useState([]);
   const view = useLive(line => setLines(l => [...l.slice(-79), line]));
   useEffect(() => {
     fetch("/api/transcript").then(r => r.json()).then(d => setLines(d.lines || [])).catch(() => {});
   }, []);
   if (!view) return <div className="loading">🏈 Connecting to the war room…</div>;
+  const tab = tabSel ?? (view.state.auction.phase === "done" ? "Season" : "Draft");
   const Comp = { Draft, Board, Odds, Season, Trades, Setup }[tab];
   return (
     <div className="app">
@@ -943,47 +944,116 @@ function Odds({ view }) {
   );
 }
 
-// ---------------- SEASON ----------------
+// ---------------- SEASON (week-by-week tracker) ----------------
+const kickoff = iso => new Date(iso).toLocaleString([], { weekday: "short", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+function OwnerTags({ own, config }) {
+  const entries = Object.entries(own || {}).filter(([, p]) => p > 0);
+  if (!entries.length) return <span className="otag none">unowned</span>;
+  return <>{entries.map(([gid, p]) => (
+    <span key={gid} className={"otag" + (gid === config.ourGroupId ? " ours" : "")}>
+      {shortName(groupName(config, gid))}{p < 100 ? ` ${p}%` : ""}
+    </span>
+  ))}</>;
+}
+
 function Season({ view }) {
-  const { state, teams, summaries, earnedByTeam, events, potForSettlement, scheduleFetchedAt } = view;
+  const { state, teams, summaries, projections, season, earnedByTeam, potForSettlement, scheduleFetchedAt, valuation } = view;
   const [syncing, setSyncing] = useState(false);
-  const groups = [...state.config.groups].sort((a, b) => (summaries[b.id]?.net ?? 0) - (summaries[a.id]?.net ?? 0));
+  const [wkSel, setWkSel] = useState(null);
+  const config = state.config;
+  const ours = config.ourGroupId;
+  const pot = potForSettlement;
+  const weeks = season?.weeks || [];
+  const curKey = wkSel || season?.currentWeek || weeks[0]?.key;
+  const week = weeks.find(w => w.key === curKey);
+  const proj = projections?.groups || {};
+  const groups = [...config.groups].sort((a, b) => (proj[b.id]?.projectedNet ?? 0) - (proj[a.id]?.projectedNet ?? 0));
+  const weekEarned = gid => season?.byGroupWeek?.[gid]?.[curKey] || 0;
+  const rec = t => { const r = season?.teamRecord?.[t]; return r ? `${r.w}-${r.l}${r.t ? `-${r.t}` : ""}` : "0-0"; };
+
+  if (state.auction.phase !== "done")
+    return <div className="pad"><p className="dim">Season tracking starts once the draft is complete.</p></div>;
+
   return (
     <div className="pad">
       <div className="statline">
-        <span>settlement pot: <b>{fmt$(potForSettlement)}</b></span>
+        <span>pot <b>{fmt$(pot)}</b> · {season?.currentWeek ? `now: ${week?.label}` : ""}</span>
         <button disabled={syncing} onClick={async () => { setSyncing(true); await fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: true }) }); setSyncing(false); }}>
-          {syncing ? "Syncing…" : "Sync scores + revalue"}
+          {syncing ? "Syncing…" : "Sync scores now"}
         </button>
       </div>
-      <p className="dim">Scores auto-sync on server start and every 6h. Last schedule pull: {scheduleFetchedAt ? new Date(scheduleFetchedAt).toLocaleString() : "—"}. {events.length} payout events recorded.</p>
-      <table className="tbl">
-        <thead><tr><th>Group</th><th className="r">Earned</th><th className="r">Spent</th><th className="r">Trades</th><th className="r">Net</th></tr></thead>
+      <p className="dim">Scores sync from ESPN every hour (last pull {scheduleFetchedAt ? new Date(scheduleFetchedAt).toLocaleString() : "—"}). Projected = banked so far + the engine's re-simulated remaining season, re-fit to real results.</p>
+
+      <h2>🏆 Standings</h2>
+      <div className="tablewrap"><table className="tbl">
+        <thead><tr><th>Group</th><th className="r">Teams</th><th className="r">Banked</th><th className="r">Projected</th><th className="r">Spent</th><th className="r">Proj. net</th><th className="r">{week?.label || "Week"}</th></tr></thead>
         <tbody>
           {groups.map(g => {
-            const s = summaries[g.id];
+            const s = summaries[g.id]; const pj = proj[g.id] || {};
             return (
-              <tr key={g.id} className={g.id === state.config.ourGroupId ? "hl" : ""}>
-                <td>{g.name}</td>
-                <td className="r">{fmt$(s.earnedDollars)} <span className="dim">({s.earnedShare.toFixed(2)}%)</span></td>
+              <tr key={g.id} className={g.id === ours ? "hl" : ""}>
+                <td>{memberNames(g.name)}</td>
+                <td className="r">{s.teams.length}</td>
+                <td className="r">{fmt$(s.earnedDollars)}</td>
+                <td className="r">{fmt$(pj.projectedEarned || 0)}</td>
                 <td className="r">{fmt$(s.spent)}</td>
-                <td className="r">{s.tradeCash ? fmt$(s.tradeCash) : "—"}</td>
-                <td className={"r " + (s.net >= 0 ? "green" : "red")}><b>{s.net >= 0 ? "+" : ""}{fmt$(s.net)}</b></td>
+                <td className={"r " + ((pj.projectedNet || 0) >= 0 ? "green" : "red")}><b>{(pj.projectedNet || 0) >= 0 ? "+" : ""}{fmt$(pj.projectedNet || 0)}</b></td>
+                <td className="r">{weekEarned(g.id) ? fmt$(weekEarned(g.id)) : "—"}</td>
               </tr>
             );
           })}
         </tbody>
-      </table>
-      <h3>Earnings by team</h3>
-      <div className="teamearn">
-        {Object.entries(earnedByTeam).sort((a, b) => b[1] - a[1]).map(([t, sh]) => (
-          <div key={t} className="soldline">
-            <img src={logo(t)} alt="" /><span>{moji(t)} {teams[t].name}</span>
-            <b>{sh.toFixed(2)}%</b><em className="dim">{fmt$((sh / 100) * potForSettlement)}</em>
-          </div>
-        ))}
-        {!Object.keys(earnedByTeam).length && <p className="dim">🦗 No games final yet — season starts Sept 10. The tracker wakes itself up.</p>}
+      </table></div>
+
+      <h2>🧢 Our teams</h2>
+      <div className="spots">
+        {(summaries[ours]?.teams || []).sort((a, b) => (valuation?.teams?.[b]?.share || 0) - (valuation?.teams?.[a]?.share || 0)).map(t => {
+          const pt = projections?.teams?.[t] || {};
+          const banked = ((earnedByTeam[t] || 0) / 100) * pot;
+          const projected = ((pt.totalShare || 0) / 100) * pot;
+          const paid = state.auction.sales[t]?.amount || 0;
+          return (
+            <div key={t} className="spot">
+              <div className="spothead"><img src={logo(t)} alt="" /><div><b>{moji(t)} {teams[t].name}</b><div className="dim">{rec(t)} · paid {fmt$(paid)}</div></div></div>
+              <div className="spotnums">
+                <div><label>banked</label><b>{fmt$(banked)}</b></div>
+                <div><label>projected</label><b>{fmt$(projected)}</b></div>
+                <div><label>vs paid</label><b className={projected - paid >= 0 ? "green" : "red"}>{projected - paid >= 0 ? "+" : ""}{fmt$(projected - paid)}</b></div>
+              </div>
+            </div>
+          );
+        })}
       </div>
+
+      <h2>📅 Week by week</h2>
+      <div className="weeknav">
+        {weeks.map(w => (
+          <button key={w.key} className={(w.key === curKey ? "on" : "") + (w.key === season?.currentWeek ? " now" : "")} onClick={() => setWkSel(w.key)}>{w.label}</button>
+        ))}
+      </div>
+      {week && (
+        <div className="games">
+          {week.games.map(g => (
+            <div key={g.id} className={"game" + (g.final ? " final" : "")}>
+              <div className={"side" + (g.winner === g.away ? " won" : "")}>
+                <img src={logo(g.away)} alt="" /><span className="abbr">{moji(g.away)} {g.away}</span>
+                <span className="owners"><OwnerTags own={g.awayOwners} config={config} /></span>
+                {g.final && <b className="score">{g.awayScore}</b>}
+              </div>
+              <div className="mid">{g.final ? "F" : kickoff(g.date)}</div>
+              <div className={"side home" + (g.winner === g.home ? " won" : "")}>
+                {g.final && <b className="score">{g.homeScore}</b>}
+                <span className="owners"><OwnerTags own={g.homeOwners} config={config} /></span>
+                <span className="abbr">{g.home} {moji(g.home)}</span><img src={logo(g.home)} alt="" />
+              </div>
+              {g.final && g.winner && g.credit > 0 && (
+                <div className="credit">+{fmt$((g.credit / 100) * pot)} → <OwnerTags own={g.winner === g.home ? g.homeOwners : g.awayOwners} config={config} /></div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

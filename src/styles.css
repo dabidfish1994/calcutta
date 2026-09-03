@@ -244,3 +244,28 @@ details[open].upnext summary::before { content: "▾ "; }
   .tabs { position: sticky; top: auto; bottom: 0; }
   .blockhead h1 { font-size: 1.7rem; }
 }
+
+/* season tracker */
+.weeknav { display: flex; gap: .35rem; overflow-x: auto; padding: .3rem 0 .6rem; }
+.weeknav button { flex: 0 0 auto; font-size: .78rem; padding: .35rem .6rem; }
+.weeknav button.on { background: var(--cardinal); border-color: var(--cardinal); color: #fff; }
+.weeknav button.now:not(.on) { border-color: var(--amber); }
+.games { display: flex; flex-direction: column; gap: .45rem; }
+.game { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .55rem .7rem; display: grid; grid-template-columns: 1fr auto 1fr; gap: .5rem; align-items: center; font-size: .86rem; }
+.game .side { display: flex; align-items: center; gap: .4rem; min-width: 0; flex-wrap: wrap; }
+.game .side.home { justify-content: flex-end; }
+.game .side img { width: 24px; height: 24px; }
+.game .side.won .abbr { color: var(--green); font-weight: 700; }
+.game .score { font-variant-numeric: tabular-nums; font-size: 1.05rem; }
+.game .mid { color: var(--dim); font-size: .72rem; text-align: center; white-space: nowrap; }
+.game .credit { grid-column: 1 / -1; font-size: .78rem; color: var(--green); display: flex; gap: .35rem; align-items: center; flex-wrap: wrap; }
+.otag { font-size: .68rem; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: .05rem .45rem; margin-right: .2rem; white-space: nowrap; }
+.otag.ours { border-color: var(--cardinal); background: #2c1717; }
+.otag.none { color: var(--dim); border-style: dashed; }
+.spots { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .6rem; }
+.spot { background: var(--panel); border: 1px solid var(--cardinal); border-radius: 10px; padding: .6rem .75rem; }
+.spothead { display: flex; gap: .55rem; align-items: center; margin-bottom: .45rem; }
+.spothead img { width: 34px; height: 34px; }
+.spotnums { display: flex; gap: 1rem; }
+.spotnums label { display: block; font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+.spotnums b { font-variant-numeric: tabular-nums; }
