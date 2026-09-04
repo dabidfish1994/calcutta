@@ -18,30 +18,45 @@ const ID_TO_ABBR = {
 const teamOf = ref => ID_TO_ABBR[Number(String(ref || "").match(/teams\/(\d+)/)?.[1])] || null;
 const american = v => { const n = parseInt(String(v).replace(/[^-+\d]/g, ""), 10); return Number.isFinite(n) ? n : null; };
 
-export async function fetchOdds() {
+// prev = previous live snapshot; prices for teams a book has temporarily pulled carry forward.
+export async function fetchOdds(prev = null) {
   const res = await fetch(URL);
   if (!res.ok) throw new Error(`ESPN futures ${res.status}`);
   const json = await res.json();
-  const out = { fetchedAt: new Date().toISOString(), provider: null, sb: {}, conf: {}, division: {} };
+  const out = { fetchedAt: new Date().toISOString(), provider: null, providers: {}, sb: {}, conf: {}, division: {}, missing: { sb: [], conf: [], division: [] } };
+  const buckets = { sb: [], conf: [], division: [] };
   for (const item of json.items || []) {
     const name = String(item.name || item.displayName || "");
     const bucket = /super bowl/i.test(name) ? "sb" : /conference/i.test(name) ? "conf" : /division/i.test(name) ? "division" : null;
     if (!bucket) continue;
-    const fut = (item.futures || [])[0];
-    if (!fut) continue;
-    out.provider ??= fut.provider?.name || null;
-    for (const b of fut.books || []) {
-      const t = teamOf(b.team?.$ref), o = american(b.value);
-      if (t && o != null) out[bucket][t] = o;
+    // Several providers may price one market; take the fullest team board, not the first listed.
+    const best = (item.futures || [])
+      .map(f => ({ provider: f.provider?.name || "?", books: (f.books || []).filter(b => teamOf(b.team?.$ref) && american(b.value) != null) }))
+      .sort((a, b) => b.books.length - a.books.length)[0];
+    if (!best || !best.books.length) continue;
+    buckets[bucket].push(best);
+  }
+  for (const [bucket, entries] of Object.entries(buckets)) {
+    for (const e of entries) {
+      out.providers[bucket] = e.provider;
+      for (const b of e.books) out[bucket][teamOf(b.team.$ref)] = american(b.value);
     }
   }
-  const n = k => Object.keys(out[k]).length;
-  if (n("sb") < 28 || n("division") < 28) throw new Error(`ESPN futures incomplete: sb=${n("sb")} div=${n("division")} conf=${n("conf")}`);
+  out.provider = out.providers.sb || Object.values(out.providers)[0] || null;
+  // Sanity floor only: an empty/near-empty SB board means the feed is broken, not that 24 teams vanished.
+  if (Object.keys(out.sb).length < 8) throw new Error(`ESPN futures looks broken: sb=${Object.keys(out.sb).length}`);
+  // Carry forward prices for teams a book has pulled (suspended selection); record which ones.
+  for (const bucket of ["sb", "conf", "division"]) {
+    for (const [t, o] of Object.entries(prev?.[bucket] || {})) {
+      if (out[bucket][t] == null) { out[bucket][t] = o; out.missing[bucket].push(t); }
+    }
+  }
   return out;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   fetchOdds().then(o => {
+    console.log(`providers ${JSON.stringify(o.providers)} · missing ${JSON.stringify(o.missing)}`);
     console.log(`provider ${o.provider} · sb ${Object.keys(o.sb).length} · conf ${Object.keys(o.conf).length} · div ${Object.keys(o.division).length}`);
     console.log("LAR", o.sb.LAR, o.conf.LAR, o.division.LAR, "| ARI", o.sb.ARI, o.conf.ARI, o.division.ARI);
     const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "data");

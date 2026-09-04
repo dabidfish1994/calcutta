@@ -940,7 +940,7 @@ function Odds({ view }) {
       ))}
       <p className="dim" style={{ marginTop: "1rem" }}>
         Super Bowl, conference, and division futures refresh automatically every day from ESPN's public feed
-        ({view.oddsMeta?.provider || "DraftKings"} prices{view.oddsMeta?.fetchedAt ? `, last ${new Date(view.oddsMeta.fetchedAt).toLocaleString()}` : ""}).
+        ({view.oddsMeta?.provider || "DraftKings"} prices{view.oddsMeta?.fetchedAt ? `, last ${new Date(view.oddsMeta.fetchedAt).toLocaleString()}` : ""}{view.oddsMeta?.ageDays > 1 ? `, ${view.oddsMeta.ageDays} days old` : ""}).{view.oddsMeta?.error ? ` ⚠️ Last refresh failed (${view.oddsMeta.error}); showing the previous snapshot.` : ""}
         Win totals are the preseason prior (the in-season model runs on actual results). Make-the-playoffs prices
         aren't in the feed, so that column is derived from the division market.
       </p>
@@ -1078,17 +1078,19 @@ function TradeFinder({ view, onDraft }) {
   return (
     <div>
       <h2>🔎 Trade finder</h2>
-      <p className="dim">Where our model (results + schedule sim) disagrees with the public view (sportsbook futures, refreshed from ESPN{oddsMeta?.fetchedAt ? ` ${new Date(oddsMeta.fetchedAt).toLocaleDateString()}` : ""}). "Offer up to" keeps a 15% edge; the counterparty will anchor near the market number.</p>
+      <p className="dim">Where our model (results + schedule sim) disagrees with the public view (sportsbook futures from ESPN{oddsMeta?.fetchedAt ? `, ${new Date(oddsMeta.fetchedAt).toLocaleString()}` : ""}{oddsMeta?.ageDays > 1 ? ` — ${oddsMeta.ageDays} days old` : ""}). "Offer up to" keeps a 15% edge; the counterparty will anchor near the market number.</p>
+      {oddsMeta?.error && <p className="amber">⚠️ Last odds refresh failed: {oddsMeta.error} — using the previous snapshot.</p>}
+      {tf.stale && <p className="amber">⏳ Buy/sell flags paused: {tf.reason}.</p>}
       <h3>Buy targets — rivals' teams our model likes more than the market</h3>
       {!tf.buy.length ? <p className="dim">Nothing worth chasing right now.</p> : (
         <div className="tablewrap"><table className="tbl">
-          <thead><tr><th>Team</th><th>Owner</th><th className="r">Model value</th><th className="r">Market value</th><th className="r">Edge</th><th className="r">Offer up to</th><th className="r">Walk away</th><th></th></tr></thead>
+          <thead><tr><th>Team</th><th>Seller</th><th className="r">Model value</th><th className="r">Market value</th><th className="r">Edge</th><th className="r">Offer up to</th><th className="r">Walk away</th><th></th></tr></thead>
           <tbody>{tf.buy.map(r => (
-            <tr key={r.team}>
-              <td>{moji(r.team)} {teams[r.team].name}</td><td>{ownerLabel(r.owners)}</td>
+            <tr key={r.team + r.owner}>
+              <td>{moji(r.team)} {teams[r.team].name}</td><td>{shortName(groupName(config, r.owner))}{r.stake < 100 ? ` (${fmtPct(r.stake)} stake)` : ""}</td>
               <td className="r">{fmt$(r.modelFuture)}</td><td className="r">{fmt$(r.marketFuture)}</td>
               <td className="r green">+{fmt$(r.edge)}</td><td className="r"><b>{fmt$(r.offerUpTo)}</b></td><td className="r">{fmt$(r.walkAway)}</td>
-              <td><button className="tiny" onClick={() => onDraft({ team: r.team, from: primaryOwner(r.owners), to: ours, pct: 100, cash: Math.round(r.offerUpTo / 25) * 25 })}>draft offer</button></td>
+              <td><button className="tiny" onClick={() => onDraft({ team: r.team, from: r.owner, to: ours, pct: r.stake, cash: Math.round(r.offerUpTo / 25) * 25 })}>draft offer</button></td>
             </tr>))}</tbody>
         </table></div>
       )}
@@ -1099,7 +1101,7 @@ function TradeFinder({ view, onDraft }) {
           <tbody>{tf.sell.map(r => (
             <tr key={r.team}>
               <td>{moji(r.team)} {teams[r.team].name}</td><td className="r">{fmtPct(r.ourStake)}</td>
-              <td className="r">{fmt$(r.modelFuture * r.ourStake / 100)}</td><td className="r">{fmt$(r.marketFuture * r.ourStake / 100)}</td>
+              <td className="r">{fmt$(r.modelFuture)}</td><td className="r">{fmt$(r.marketFuture)}</td>
               <td className="r"><b>{fmt$(r.askAtLeast)}</b></td><td className="r">{fmt$(r.floor)}</td>
             </tr>))}</tbody>
         </table></div>
@@ -1109,7 +1111,7 @@ function TradeFinder({ view, onDraft }) {
           <thead><tr><th>Team</th><th>Owner</th><th className="r">Banked</th><th className="r">Model</th><th className="r">Market</th><th className="r">Edge</th></tr></thead>
           <tbody>{tf.all.map(r => (
             <tr key={r.team} className={r.ourStake > 0 ? "hl" : ""}>
-              <td>{moji(r.team)} {r.team}</td><td>{ownerLabel(r.owners)}</td>
+              <td>{moji(r.team)} {r.team}{r.eliminated ? " ✖" : ""}</td><td>{ownerLabel(r.owners)}</td>
               <td className="r">{fmt$(r.banked$)}</td><td className="r">{fmt$(r.modelFuture)}</td><td className="r">{fmt$(r.marketFuture)}</td>
               <td className={"r " + (r.edge >= 0 ? "green" : "red")}>{r.edge >= 0 ? "+" : ""}{fmt$(r.edge)}</td>
             </tr>))}</tbody>
@@ -1179,6 +1181,9 @@ function Trades({ view }) {
               if (r?.error) setErr(r.error); else setForm({ team: "", from: "", to: "", pct: 50, cash: 0 });
             }}
           >{pending ? "Recording…" : "Record trade"}</button>
+          {form.from && form.pct > ((owners.find(([g]) => g === form.from)?.[1]) ?? 0) && (
+            <p className="dim">Seller only owns {fmtPct((owners.find(([g]) => g === form.from)?.[1]) ?? 0)} of this team.</p>
+          )}
         </div>
       )}
       <h3>Ledger</h3>

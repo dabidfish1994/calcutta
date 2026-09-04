@@ -1,6 +1,11 @@
 {
- "fetchedAt": "2026-09-04T01:02:12.433Z",
+ "fetchedAt": "2026-09-04T01:25:55.173Z",
  "provider": "DraftKings",
+ "providers": {
+  "sb": "DraftKings",
+  "conf": "DraftKings",
+  "division": "DraftKings"
+ },
  "sb": {
   "LAR": 500,
   "BUF": 1000,
@@ -102,5 +107,10 @@
   "NO": 255,
   "CAR": 350,
   "ATL": 400
+ },
+ "missing": {
+  "sb": [],
+  "conf": [],
+  "division": []
  }
 }

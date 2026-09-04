@@ -256,66 +256,106 @@ function projections(gs, pot) {
 
 
 // ---------- market odds: static snapshot + live ESPN futures overlay ----------
+function readLive() {
+  try { return JSON.parse(fs.readFileSync(DATA("market-odds-live.json"), "utf8")); } catch { return null; }
+}
 function loadMarketOdds() {
-  let base = {};
-  try { base = JSON.parse(fs.readFileSync(DATA("market-odds-2026.json"), "utf8")); } catch {}
-  let live = null;
-  try {
-    live = JSON.parse(fs.readFileSync(DATA("market-odds-live.json"), "utf8"));
-    if (Date.now() - Date.parse(live.fetchedAt) > 10 * 86400e3) live = null; // too stale to trust
-  } catch {}
+  const live = readLive();
   const out = {};
-  for (const t of TEAM_IDS) {
-    const b = base[t] || {};
-    out[t] = { ...b };
-    if (live) {
+  if (live) {
+    // Once a live snapshot exists it is ALWAYS fresher than the preseason file: never fall back.
+    // Teams absent from a board reach the sim fallback in marketProbs (no static price sneaks in).
+    for (const t of TEAM_IDS) {
+      out[t] = {};
       if (live.sb?.[t] != null) out[t].sb = live.sb[t];
       if (live.division?.[t] != null) out[t].division = live.division[t];
       if (live.conf?.[t] != null) out[t].conf = live.conf[t];
-      // ESPN carries no make-the-playoffs market; once live odds exist, drop the aging static
-      // playoff price so the blend uses its division-derived proxy from fresh numbers instead.
-      delete out[t].playoff;
     }
+    return out;
   }
+  let base = {};
+  try { base = JSON.parse(fs.readFileSync(DATA("market-odds-2026.json"), "utf8")); } catch {}
+  for (const t of TEAM_IDS) out[t] = { ...(base[t] || {}) };
   return out;
 }
-let oddsMeta = { fetchedAt: null, provider: null, error: null };
-try { const l = JSON.parse(fs.readFileSync(DATA("market-odds-live.json"), "utf8")); oddsMeta = { fetchedAt: l.fetchedAt, provider: l.provider, error: null }; } catch {}
-async function refreshOdds() {
+let oddsMeta = { fetchedAt: null, provider: null, error: null, ageDays: null };
+function updateOddsMeta(error = null) {
+  const l = readLive();
+  const fetchedAt = l?.fetchedAt || null;
+  oddsMeta = {
+    fetchedAt, provider: l?.provider || null, providers: l?.providers || null, missing: l?.missing || null,
+    error, ageDays: fetchedAt ? Math.floor((Date.now() - Date.parse(fetchedAt)) / 86400e3) : null
+  };
+}
+updateOddsMeta();
+let lastOddsRefresh = 0;
+async function refreshOdds({ minGapMs = 0 } = {}) {
+  if (Date.now() - lastOddsRefresh < minGapMs) return;
+  lastOddsRefresh = Date.now();
   try {
-    const live = await fetchOdds();
+    const prev = readLive();
+    const live = await fetchOdds(prev);
+    const same = prev && JSON.stringify([prev.sb, prev.conf, prev.division]) === JSON.stringify([live.sb, live.conf, live.division]);
     fs.writeFileSync(DATA("market-odds-live.json"), JSON.stringify(live, null, 1));
-    oddsMeta = { fetchedAt: live.fetchedAt, provider: live.provider, error: null };
-    await syncScores(); // inputs hash changed -> revalue
+    updateOddsMeta(null);
+    if (!same) await syncScores(); // effective inputs changed -> revalue (unchanged odds don't re-roll the sim)
+    else broadcast();
   } catch (e) {
-    oddsMeta = { ...oddsMeta, error: e.message };
+    updateOddsMeta(e.message);
     console.error("odds refresh failed:", e.message);
   }
 }
 
 // ---------- trade finder: where our model and the public's view disagree ----------
 function tradeFinder(gs, pot) {
-  if (!valuation?.teams) return { buy: [], sell: [], all: [] };
+  if (!valuation?.teams) return { buy: [], sell: [], all: [], stale: true, reason: "no valuation yet" };
   const now = new Date().toISOString();
   const ours = state.config.ourGroupId;
+  // Teams that lost a final playoff game have no future (interim until the playoff-aware engine lands).
+  const eliminated = new Set();
+  for (const g of schedule?.games || []) {
+    if (g.seasontype === 3 && g.final && g.homeScore != null && g.homeScore !== g.awayScore) eliminated.add(g.homeScore > g.awayScore ? g.away : g.home);
+  }
+  // Market snapshot must be at least as new as the newest final, or "market value" is just lag.
+  const newestFinal = (schedule?.games || []).filter(g => g.final).map(g => g.date).sort().pop() || null;
+  const staleOdds = !!newestFinal && (!oddsMeta.fetchedAt || oddsMeta.fetchedAt < newestFinal);
   const rows = [];
   for (const t of Object.keys(state.auction.sales)) {
     const v = valuation.teams[t]; if (!v) continue;
     const banked = gs.earnedByTeam[t] || 0;
-    const modelFuture = Math.max(0, (v.share ?? 0) - banked) / 100 * pot;
-    const marketFuture = Math.max(0, (v.shareMarket ?? v.share ?? 0) - banked) / 100 * pot;
+    const dead = eliminated.has(t);
+    const modelFuture = dead ? 0 : Math.max(0, (v.shareModel ?? v.share ?? 0) - banked) / 100 * pot;
+    const marketFuture = dead ? 0 : Math.max(0, (v.shareMarket ?? v.share ?? 0) - banked) / 100 * pot;
     const owners = ownershipAt(t, now);
     const ourStake = owners[ours] || 0;
     rows.push({ team: t, owners, ourStake, banked$: banked / 100 * pot, modelFuture, marketFuture, edge: modelFuture - marketFuture,
-      edgePct: marketFuture > 0 ? (modelFuture - marketFuture) / marketFuture : 0 });
+      edgePct: marketFuture > 0 ? (modelFuture - marketFuture) / marketFuture : 0, eliminated: dead });
   }
-  const buy = rows.filter(r => r.ourStake < 100 && r.edge >= 75 && r.edgePct >= 0.08)
-    .map(r => ({ ...r, offerUpTo: Math.min(r.modelFuture * 0.85, r.marketFuture), walkAway: r.modelFuture * 0.92 }))
-    .sort((a, b) => b.edge - a.edge);
-  const sell = rows.filter(r => r.ourStake > 0 && -r.edge >= 75 && -r.edgePct >= 0.08)
-    .map(r => ({ ...r, askAtLeast: Math.max(r.marketFuture, r.modelFuture * 1.15) * (r.ourStake / 100), floor: r.modelFuture * 1.05 * (r.ourStake / 100) }))
-    .sort((a, b) => a.edge - b.edge);
-  return { buy, sell, all: rows.sort((a, b) => b.edge - a.edge) };
+  const buy = [], sell = [];
+  if (!staleOdds) {
+    for (const r of rows) {
+      if (r.eliminated) continue;
+      // One BUY row per rival owner, priced on THEIR stake.
+      for (const [owner, p] of Object.entries(r.owners)) {
+        if (owner === ours || !(p > 0)) continue;
+        const f = p / 100, edge = r.edge * f;
+        if (edge >= 75 && r.edgePct >= 0.08) {
+          buy.push({ ...r, owner, stake: p, modelFuture: r.modelFuture * f, marketFuture: r.marketFuture * f, edge,
+            offerUpTo: Math.min(r.modelFuture * 0.85, r.marketFuture) * f, walkAway: r.modelFuture * 0.92 * f });
+        }
+      }
+      if (r.ourStake > 0) {
+        const f = r.ourStake / 100, edge = -r.edge * f;
+        if (edge >= 75 && -r.edgePct >= 0.08) {
+          sell.push({ ...r, stake: r.ourStake, modelFuture: r.modelFuture * f, marketFuture: r.marketFuture * f, edge: -edge,
+            askAtLeast: Math.max(r.marketFuture, r.modelFuture * 1.15) * f, floor: r.modelFuture * 1.05 * f });
+        }
+      }
+    }
+  }
+  buy.sort((a, b) => b.edge - a.edge); sell.sort((a, b) => a.edge - b.edge);
+  return { buy, sell, all: rows.sort((a, b) => b.edge - a.edge), stale: staleOdds,
+    reason: staleOdds ? "waiting for the sportsbooks to reprice after the latest results" : null };
 }
 
 function view() {
@@ -373,10 +413,14 @@ async function syncScores({ force = false } = {}) {
     schedule = await fetchAndCache();
     const after = schedule.games.filter(g => g.final).length;
     // Recompute when the code version OR any valuation input (lines, odds, active profile) changed.
-    const inputsHash = ["win-totals-2026.json", "market-odds-2026.json", "market-odds-live.json", "payout-profiles-2026.json"]
-      .map(f => { try { return fs.readFileSync(DATA(f), "utf8"); } catch { return ""; } })
-      .reduce((h, s) => { for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }, 7);
+    const effective = JSON.stringify([
+      (() => { try { return JSON.parse(fs.readFileSync(DATA("win-totals-2026.json"), "utf8")); } catch { return null; } })(),
+      loadMarketOdds(),
+      resolveProfile(profiles)
+    ]);
+    const inputsHash = [...effective].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7);
     const stale = !valuation || valuation.version !== VALUATION_VERSION || valuation.inputsHash !== inputsHash;
+    if (after !== before && before >= 0) setTimeout(() => refreshOdds({ minGapMs: 3 * 3600e3 }), 5000); // books reprice after finals
     if ((after !== before || force || stale) && !revaluing) {
       revaluing = true;
       try {

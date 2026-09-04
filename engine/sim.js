@@ -16,7 +16,7 @@ const HFA = 40; // home-field advantage in Elo points (~55.7% for even teams)
 const ELO_K = 25;
 
 // Bump when the valuation schema/logic changes so cached valuation.json files recompute on deploy.
-export const VALUATION_VERSION = 6;
+export const VALUATION_VERSION = 7;
 
 export function winProb(rA, rB, hfaA) {
   return 1 / (1 + Math.pow(10, -((rA + hfaA - rB) / 400)));
@@ -158,6 +158,7 @@ export function simulate({ ratings, futureGames, actualWins = null, nSims = 1000
     const samples = shareSamples[t].sort((a, b) => a - b);
     const mean = samples.reduce((a, b) => a + b, 0) / nSims;
     out[t] = {
+      winsBanked: actualWins ? actualWins[t] : 0,
       expWins: tally[t].wins / nSims,
       pPlayoffs: tally[t].berth / nSims,
       pOneSeed: tally[t].oneSeed / nSims,
