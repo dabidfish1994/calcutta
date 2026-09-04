@@ -68,6 +68,7 @@ state.auction.bids ??= [];
 state.auction.sales ??= {};
 state.auction.origSaleTs ??= {};
 state.auction.paused ??= false;
+state.seasonStarted ??= state.auction.phase === "done";
 let undoStack = [];
 
 let schedule = fs.existsSync(DATA("schedule-2026.json"))
@@ -188,29 +189,26 @@ function groupSummaries(events, pot) {
 const WEEK_LABEL = (st, wk) => (st === 2 ? `Week ${wk}` : { 1: "Wild Card", 2: "Divisional", 3: "Conf. Champ.", 5: "Super Bowl" }[wk] || `Playoffs ${wk}`);
 function seasonSummary(events, pot) {
   if (!schedule) return null;
-  const p = resolveProfile(profiles);
-  const creditByGame = {};
-  // Attribute each event to a game id when it came from a game result.
   const games = [...schedule.games].sort((a, b) => a.date.localeCompare(b.date));
   const weeksMap = new Map();
   for (const g of games) {
     const key = `${g.seasontype}-${g.week}`;
     if (!weeksMap.has(key)) weeksMap.set(key, { key, seasontype: g.seasontype, week: g.week, label: WEEK_LABEL(g.seasontype, g.week), games: [], start: g.date });
     const winner = g.final && g.homeScore != null ? (g.homeScore > g.awayScore ? g.home : g.awayScore > g.homeScore ? g.away : null) : null;
-    let credit = 0;
-    if (winner) {
-      if (g.seasontype === 2) credit = p.regWin;
-      else credit = ({ 1: p.wcWin + p.reachDiv, 2: p.divWin, 3: p.confWin, 5: p.sbWin })[g.week] || 0;
-    }
+    // Credits come straight from the payout ledger for this game's date/teams — never a parallel formula.
+    const credits = {};
+    for (const ev of events) if (ev.ts === g.date && (ev.team === g.home || ev.team === g.away)) credits[ev.team] = (credits[ev.team] || 0) + ev.credit;
     weeksMap.get(key).games.push({
       id: g.id, date: g.date, home: g.home, away: g.away, homeScore: g.homeScore, awayScore: g.awayScore,
-      final: !!g.final, winner, credit,
+      final: !!g.final, state: g.state || (g.final ? "post" : "pre"), timeValid: g.timeValid !== false, winner,
+      credits: Object.entries(credits).map(([team, credit]) => ({ team, credit, owners: ownershipAt(team, g.date) })),
       homeOwners: ownershipAt(g.home, g.date), awayOwners: ownershipAt(g.away, g.date)
     });
   }
   const weeks = [...weeksMap.values()];
   // current week = first week with an unfinished game (or the last week)
-  const cur = weeks.find(w => w.games.some(g => !g.final)) || weeks[weeks.length - 1];
+  const pending = g => !g.final && g.state !== "post"; // canceled games are not pending forever
+  const cur = weeks.find(w => w.games.some(pending)) || weeks[weeks.length - 1];
   // per-group earnings by week, from the payout events (dated by game)
   const byGroupWeek = {};
   for (const ev of events) {
@@ -251,14 +249,15 @@ function projections(gs, pot) {
     o.projectedEarned = o.banked + o.future;
     o.projectedNet = o.projectedEarned - spent + cash;
   }
-  return { groups: out, teams: perTeam };
+  const currentOwners = Object.fromEntries(Object.keys(state.auction.sales).map(t => [t, ownershipAt(t, now)]));
+  return { groups: out, teams: perTeam, currentOwners };
 }
 
 function view() {
   const rp = repricing();
   const events = payoutEvents();
   const finalPot = rp.spent; // once auction done, actual pot = total sold
-  const potForSettlement = state.auction.phase === "done" ? finalPot : rp.potEstimate;
+  const potForSettlement = (state.seasonStarted || state.auction.phase === "done") ? finalPot : rp.potEstimate;
   // Every dollar figure on screen derives from the SAME pot, or the tables disagree.
   const gs = groupSummaries(events, potForSettlement);
   const season = seasonSummary(events, potForSettlement);
@@ -266,6 +265,7 @@ function view() {
   return {
     season,
     projections: proj,
+    seasonStarted: !!state.seasonStarted,
     state,
     teams: TEAMS,
     valuation: valuation ? {
@@ -426,7 +426,7 @@ const actions = {
     if (state.auction.origSaleTs) delete state.auction.origSaleTs[cur];
     state.auction.sales[cur] = { group: g.id, amount: Number(amt), ts };
     state.auction.onBlock = null;
-    if (Object.keys(state.auction.sales).length >= TEAM_IDS.length) state.auction.phase = "done";
+    if (Object.keys(state.auction.sales).length >= TEAM_IDS.length) { state.auction.phase = "done"; state.seasonStarted = true; }
   },
   skipTeam() {
     if (state.auction.paused) return { error: "Draft is paused — resume first." };
@@ -462,6 +462,7 @@ const actions = {
     if (group) top.group = group;
   },
   reopenTeam({ team }) {
+    if (state.seasonStarted) return { error: "Season has started — fix price/owner with ✎ instead of reopening." };
     if (state.auction.paused) return { error: "Draft is paused — resume first. (Price fixes via ✎ still work.)" };
     const s = state.auction.sales[team];
     if (!s) return { error: "Team is not sold." };
@@ -482,15 +483,21 @@ const actions = {
     state.auction.paused = livePaused;
     state.trades = prev.trades;
   },
-  addTrade({ team, from, to, pct, cash, ts }) {
-    snapshot();
-    state.trades.push({
-      id: `t${Date.now()}`,
-      team, from, to,
-      pct: Number(pct),
-      cash: Number(cash),
-      ts: ts || new Date().toISOString()
-    });
+  addTrade({ team, from, to, pct, cash }) {
+    if (!state.auction.sales[team]) return { error: "That team was never sold." };
+    if (!from || !to || from === to) return { error: "Seller and buyer must be two different groups." };
+    if (!groupById(from) || !groupById(to)) return { error: "Unknown group." };
+    const stakePct = Math.round(Number(pct) * 10) / 10;
+    const now = new Date().toISOString(); // server time only — trades can't be backdated
+    const stake = ownershipAt(team, now)[from] || 0;
+    if (!(stakePct > 0) || stakePct > stake + 1e-9) return { error: `${groupById(from).name} owns ${stake}% of ${team} — can't sell ${stakePct}%.` };
+    if (!(Number(cash) >= 0)) return { error: "Cash must be zero or positive." };
+    const live = (schedule?.games || []).some(g => g.state === "in" && (g.home === team || g.away === team));
+    if (live) return { error: `${team} is mid-game — record the trade after the final (wins bank to the owner at kickoff).` };
+    const deadline = (schedule?.games || []).some(g => g.seasontype === 3 && g.week === 3 && TEAM_IDS.includes(g.home) && TEAM_IDS.includes(g.away));
+    if (deadline) return { error: "Trade deadline passed — conference championship matchups are set." };
+    snapshot(`trade ${stakePct}% ${team}`);
+    state.trades.push({ id: `t${Date.now()}`, team, from, to, pct: stakePct, cash: Number(cash), ts: now });
   },
   deleteTrade({ id }) {
     snapshot();

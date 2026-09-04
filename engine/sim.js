@@ -16,7 +16,7 @@ const HFA = 40; // home-field advantage in Elo points (~55.7% for even teams)
 const ELO_K = 25;
 
 // Bump when the valuation schema/logic changes so cached valuation.json files recompute on deploy.
-export const VALUATION_VERSION = 4;
+export const VALUATION_VERSION = 5;
 
 export function winProb(rA, rB, hfaA) {
   return 1 / (1 + Math.pow(10, -((rA + hfaA - rB) / 400)));
@@ -188,7 +188,8 @@ export function simulate({ ratings, futureGames, actualWins = null, nSims = 1000
 // Full pipeline from raw inputs. Played games feed both Elo updates and banked wins;
 // remaining games get simulated. Preseason this is simply the whole schedule.
 export function valuate(scheduleGames, winTotals, nSims = 10000, marketOdds = null, profile = PDF_PROFILE) {
-  const regular = scheduleGames.filter(g => g.seasontype === 2);
+  const canceled = g => g.state === "post" && !g.final; // canceled / postponed-forever: never played
+  const regular = scheduleGames.filter(g => g.seasontype === 2 && !canceled(g));
   const played = regular.filter(g => g.final && g.homeScore != null);
   const future = regular.filter(g => !g.final);
   const preseason = fitRatings(regular, winTotals);
@@ -197,7 +198,7 @@ export function valuate(scheduleGames, winTotals, nSims = 10000, marketOdds = nu
   for (const g of played) {
     if (g.homeScore > g.awayScore) actualWins[g.home]++;
     else if (g.awayScore > g.homeScore) actualWins[g.away]++;
-    else { actualWins[g.home] += 0.5; actualWins[g.away] += 0.5; }
+    // A tie is not a win under pay-per-win scoring: banks nothing, so the model counts nothing.
   }
   const sim = simulate({ ratings, futureGames: future, actualWins, nSims, profile });
   let teams = sim.teams;
