@@ -62,6 +62,24 @@ Every finalized speech line is saved to `data/transcripts/YYYY-MM-DD.jsonl` with
 detected amounts, guessed group, and the team on the block. The Transcript panel (Draft tab)
 shows it live on all devices — it's the audit trail for any disputed price.
 
+## Odds — automatic from ESPN
+
+Super Bowl, conference, and division futures refresh **daily** from ESPN's public futures feed
+(`engine/fetch-odds.js`, DraftKings prices, no key) into `data/market-odds-live.json` and
+overlay the preseason snapshot; a change to any input re-runs the simulation. ESPN carries no
+make-the-playoffs market, so that probability is derived from the division market. Win totals
+stay the preseason prior (the in-season model runs on results). Scores pull hourly from ESPN's
+public scoreboard (`engine/fetch-schedule.js`).
+
+## Trade finder
+
+The Trades tab compares two values for every team's *remaining* season: **model** (results +
+schedule simulation, market weight decaying to zero by Week 18) and **market** (the same sim
+with playoff tails fully driven by today's futures — the number a rival looking at Vegas will
+anchor on). Rivals' teams where model > market by ≥ $75 and ≥ 8% are buy targets with an
+"offer up to" (85% of model value, never above market) and a walk-away; our teams where
+market > model are sell candidates with an ask. "Draft offer" prefills the trade form.
+
 ## Odds tab — market lines, blended in
 
 The Odds tab shows every team's sportsbook lines (win-total O/U, make-the-playoffs price,

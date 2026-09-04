@@ -939,9 +939,10 @@ function Odds({ view }) {
         </div>
       ))}
       <p className="dim" style={{ marginTop: "1rem" }}>
-        Lines: consensus win totals (FOX/Yahoo), Super Bowl futures (ESPN, Aug 16), make-the-playoffs (Yahoo),
-        division winners (Jul 25). Edit <code>data/market-odds-2026.json</code> to refresh; the engine de-vigs
-        and re-blends on the next sync.
+        Super Bowl, conference, and division futures refresh automatically every day from ESPN's public feed
+        ({view.oddsMeta?.provider || "DraftKings"} prices{view.oddsMeta?.fetchedAt ? `, last ${new Date(view.oddsMeta.fetchedAt).toLocaleString()}` : ""}).
+        Win totals are the preseason prior (the in-season model runs on actual results). Make-the-playoffs prices
+        aren't in the feed, so that column is derived from the division market.
       </p>
     </div>
   );
@@ -1067,6 +1068,57 @@ function Season({ view }) {
   );
 }
 
+
+function TradeFinder({ view, onDraft }) {
+  const { tradeFinder: tf, state, teams, oddsMeta } = view;
+  if (!tf) return null;
+  const config = state.config; const ours = config.ourGroupId;
+  const ownerLabel = own => Object.entries(own).filter(([, p]) => p > 0).map(([g, p]) => `${shortName(groupName(config, g))}${p < 100 ? ` ${fmtPct(p)}` : ""}`).join(", ");
+  const primaryOwner = own => Object.entries(own).filter(([g, p]) => p > 0 && g !== ours).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  return (
+    <div>
+      <h2>🔎 Trade finder</h2>
+      <p className="dim">Where our model (results + schedule sim) disagrees with the public view (sportsbook futures, refreshed from ESPN{oddsMeta?.fetchedAt ? ` ${new Date(oddsMeta.fetchedAt).toLocaleDateString()}` : ""}). "Offer up to" keeps a 15% edge; the counterparty will anchor near the market number.</p>
+      <h3>Buy targets — rivals' teams our model likes more than the market</h3>
+      {!tf.buy.length ? <p className="dim">Nothing worth chasing right now.</p> : (
+        <div className="tablewrap"><table className="tbl">
+          <thead><tr><th>Team</th><th>Owner</th><th className="r">Model value</th><th className="r">Market value</th><th className="r">Edge</th><th className="r">Offer up to</th><th className="r">Walk away</th><th></th></tr></thead>
+          <tbody>{tf.buy.map(r => (
+            <tr key={r.team}>
+              <td>{moji(r.team)} {teams[r.team].name}</td><td>{ownerLabel(r.owners)}</td>
+              <td className="r">{fmt$(r.modelFuture)}</td><td className="r">{fmt$(r.marketFuture)}</td>
+              <td className="r green">+{fmt$(r.edge)}</td><td className="r"><b>{fmt$(r.offerUpTo)}</b></td><td className="r">{fmt$(r.walkAway)}</td>
+              <td><button className="tiny" onClick={() => onDraft({ team: r.team, from: primaryOwner(r.owners), to: ours, pct: 100, cash: Math.round(r.offerUpTo / 25) * 25 })}>draft offer</button></td>
+            </tr>))}</tbody>
+        </table></div>
+      )}
+      <h3>Sell candidates — our teams the market likes more than our model</h3>
+      {!tf.sell.length ? <p className="dim">Nothing to shop.</p> : (
+        <div className="tablewrap"><table className="tbl">
+          <thead><tr><th>Team</th><th className="r">Our stake</th><th className="r">Model value</th><th className="r">Market value</th><th className="r">Ask at least</th><th className="r">Floor</th></tr></thead>
+          <tbody>{tf.sell.map(r => (
+            <tr key={r.team}>
+              <td>{moji(r.team)} {teams[r.team].name}</td><td className="r">{fmtPct(r.ourStake)}</td>
+              <td className="r">{fmt$(r.modelFuture * r.ourStake / 100)}</td><td className="r">{fmt$(r.marketFuture * r.ourStake / 100)}</td>
+              <td className="r"><b>{fmt$(r.askAtLeast)}</b></td><td className="r">{fmt$(r.floor)}</td>
+            </tr>))}</tbody>
+        </table></div>
+      )}
+      <details className="upnext"><summary><h3 style={{ display: "inline" }}>All 32 — model vs market remaining value</h3></summary>
+        <div className="tablewrap"><table className="tbl">
+          <thead><tr><th>Team</th><th>Owner</th><th className="r">Banked</th><th className="r">Model</th><th className="r">Market</th><th className="r">Edge</th></tr></thead>
+          <tbody>{tf.all.map(r => (
+            <tr key={r.team} className={r.ourStake > 0 ? "hl" : ""}>
+              <td>{moji(r.team)} {r.team}</td><td>{ownerLabel(r.owners)}</td>
+              <td className="r">{fmt$(r.banked$)}</td><td className="r">{fmt$(r.modelFuture)}</td><td className="r">{fmt$(r.marketFuture)}</td>
+              <td className={"r " + (r.edge >= 0 ? "green" : "red")}>{r.edge >= 0 ? "+" : ""}{fmt$(r.edge)}</td>
+            </tr>))}</tbody>
+        </table></div>
+      </details>
+    </div>
+  );
+}
+
 // ---------------- TRADES ----------------
 function Trades({ view }) {
   const { state, teams, valuation, earnedByTeam, potForSettlement } = view;
@@ -1092,6 +1144,7 @@ function Trades({ view }) {
 
   return (
     <div className="pad">
+      <TradeFinder view={view} onDraft={o => setForm(o)} />
       <h2>🤝 Trade desk</h2>
       {!soldTeams.length ? <p className="dim">Trades open once teams are sold.</p> : (
         <div className="tradeform">

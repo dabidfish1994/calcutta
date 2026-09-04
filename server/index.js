@@ -11,6 +11,7 @@ import { TEAMS, TEAM_IDS } from "../engine/teams.js";
 import { valuate, VALUATION_VERSION } from "../engine/sim.js";
 import { fetchAndCache } from "../engine/fetch-schedule.js";
 import { loadProfiles, resolveProfile } from "../engine/payouts.js";
+import { fetchOdds } from "../engine/fetch-odds.js";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, "data");
@@ -253,6 +254,70 @@ function projections(gs, pot) {
   return { groups: out, teams: perTeam, currentOwners };
 }
 
+
+// ---------- market odds: static snapshot + live ESPN futures overlay ----------
+function loadMarketOdds() {
+  let base = {};
+  try { base = JSON.parse(fs.readFileSync(DATA("market-odds-2026.json"), "utf8")); } catch {}
+  let live = null;
+  try {
+    live = JSON.parse(fs.readFileSync(DATA("market-odds-live.json"), "utf8"));
+    if (Date.now() - Date.parse(live.fetchedAt) > 10 * 86400e3) live = null; // too stale to trust
+  } catch {}
+  const out = {};
+  for (const t of TEAM_IDS) {
+    const b = base[t] || {};
+    out[t] = { ...b };
+    if (live) {
+      if (live.sb?.[t] != null) out[t].sb = live.sb[t];
+      if (live.division?.[t] != null) out[t].division = live.division[t];
+      if (live.conf?.[t] != null) out[t].conf = live.conf[t];
+      // ESPN carries no make-the-playoffs market; once live odds exist, drop the aging static
+      // playoff price so the blend uses its division-derived proxy from fresh numbers instead.
+      delete out[t].playoff;
+    }
+  }
+  return out;
+}
+let oddsMeta = { fetchedAt: null, provider: null, error: null };
+try { const l = JSON.parse(fs.readFileSync(DATA("market-odds-live.json"), "utf8")); oddsMeta = { fetchedAt: l.fetchedAt, provider: l.provider, error: null }; } catch {}
+async function refreshOdds() {
+  try {
+    const live = await fetchOdds();
+    fs.writeFileSync(DATA("market-odds-live.json"), JSON.stringify(live, null, 1));
+    oddsMeta = { fetchedAt: live.fetchedAt, provider: live.provider, error: null };
+    await syncScores(); // inputs hash changed -> revalue
+  } catch (e) {
+    oddsMeta = { ...oddsMeta, error: e.message };
+    console.error("odds refresh failed:", e.message);
+  }
+}
+
+// ---------- trade finder: where our model and the public's view disagree ----------
+function tradeFinder(gs, pot) {
+  if (!valuation?.teams) return { buy: [], sell: [], all: [] };
+  const now = new Date().toISOString();
+  const ours = state.config.ourGroupId;
+  const rows = [];
+  for (const t of Object.keys(state.auction.sales)) {
+    const v = valuation.teams[t]; if (!v) continue;
+    const banked = gs.earnedByTeam[t] || 0;
+    const modelFuture = Math.max(0, (v.share ?? 0) - banked) / 100 * pot;
+    const marketFuture = Math.max(0, (v.shareMarket ?? v.share ?? 0) - banked) / 100 * pot;
+    const owners = ownershipAt(t, now);
+    const ourStake = owners[ours] || 0;
+    rows.push({ team: t, owners, ourStake, banked$: banked / 100 * pot, modelFuture, marketFuture, edge: modelFuture - marketFuture,
+      edgePct: marketFuture > 0 ? (modelFuture - marketFuture) / marketFuture : 0 });
+  }
+  const buy = rows.filter(r => r.ourStake < 100 && r.edge >= 75 && r.edgePct >= 0.08)
+    .map(r => ({ ...r, offerUpTo: Math.min(r.modelFuture * 0.85, r.marketFuture), walkAway: r.modelFuture * 0.92 }))
+    .sort((a, b) => b.edge - a.edge);
+  const sell = rows.filter(r => r.ourStake > 0 && -r.edge >= 75 && -r.edgePct >= 0.08)
+    .map(r => ({ ...r, askAtLeast: Math.max(r.marketFuture, r.modelFuture * 1.15) * (r.ourStake / 100), floor: r.modelFuture * 1.05 * (r.ourStake / 100) }))
+    .sort((a, b) => a.edge - b.edge);
+  return { buy, sell, all: rows.sort((a, b) => b.edge - a.edge) };
+}
+
 function view() {
   const rp = repricing();
   const events = payoutEvents();
@@ -262,9 +327,12 @@ function view() {
   const gs = groupSummaries(events, potForSettlement);
   const season = seasonSummary(events, potForSettlement);
   const proj = projections(gs, potForSettlement);
+  const trades = tradeFinder(gs, potForSettlement);
   return {
     season,
     projections: proj,
+    tradeFinder: trades,
+    oddsMeta,
     seasonStarted: !!state.seasonStarted,
     state,
     teams: TEAMS,
@@ -305,7 +373,7 @@ async function syncScores({ force = false } = {}) {
     schedule = await fetchAndCache();
     const after = schedule.games.filter(g => g.final).length;
     // Recompute when the code version OR any valuation input (lines, odds, active profile) changed.
-    const inputsHash = ["win-totals-2026.json", "market-odds-2026.json", "payout-profiles-2026.json"]
+    const inputsHash = ["win-totals-2026.json", "market-odds-2026.json", "market-odds-live.json", "payout-profiles-2026.json"]
       .map(f => { try { return fs.readFileSync(DATA(f), "utf8"); } catch { return ""; } })
       .reduce((h, s) => { for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }, 7);
     const stale = !valuation || valuation.version !== VALUATION_VERSION || valuation.inputsHash !== inputsHash;
@@ -313,8 +381,7 @@ async function syncScores({ force = false } = {}) {
       revaluing = true;
       try {
         const winTotals = JSON.parse(fs.readFileSync(DATA("win-totals-2026.json"), "utf8"));
-        let marketOdds = null;
-        try { marketOdds = JSON.parse(fs.readFileSync(DATA("market-odds-2026.json"), "utf8")); } catch {}
+        const marketOdds = loadMarketOdds();
         valuation = valuate(schedule.games, winTotals, 10000, marketOdds, resolveProfile(profiles));
         valuation.inputsHash = inputsHash;
         fs.writeFileSync(DATA("valuation.json"), JSON.stringify(valuation, null, 1));
@@ -330,7 +397,8 @@ async function syncScores({ force = false } = {}) {
   }
 }
 setInterval(() => syncScores(), 60 * 60 * 1000); // hourly during the season
-syncScores(); // on boot: fresh schedule + valuation, zero manual steps
+setInterval(() => refreshOdds(), 24 * 60 * 60 * 1000); // futures from ESPN daily
+syncScores().then(() => refreshOdds()); // on boot: schedule + valuation, then live odds — zero manual steps
 
 // ---------- actions ----------
 const MIN_OPEN = 50;
