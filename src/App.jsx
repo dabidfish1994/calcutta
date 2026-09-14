@@ -978,9 +978,31 @@ function Season({ view }) {
 
   const nowWeek = weeks.find(w => w.key === season?.currentWeek);
   const owners = projections?.currentOwners || {};
-  const myTeams = Object.keys(owners).filter(t => (owners[t]?.[ours] || 0) > 0)
+  // Teams a group currently holds any stake in, best-valued first.
+  const teamsOf = gid => Object.keys(owners).filter(t => (owners[t]?.[gid] || 0) > 0)
     .sort((a, b) => (valuation?.teams?.[b]?.share || 0) - (valuation?.teams?.[a]?.share || 0));
-  const tradeCashFor = t => state.trades.reduce((sum, tr) => tr.team !== t ? sum : sum + (tr.from === ours ? tr.cash : 0) - (tr.to === ours ? tr.cash : 0), 0);
+  const myTeams = teamsOf(ours);
+  const rivals = groups.filter(g => g.id !== ours);
+  const tradeCashFor = (t, gid) => state.trades.reduce((sum, tr) => tr.team !== t ? sum : sum + (tr.from === gid ? tr.cash : 0) - (tr.to === gid ? tr.cash : 0), 0);
+  // Net cost of a team to a group: auction price (if they bought it) minus trade cash received, plus trade cash paid.
+  const paidFor = (t, gid) => (state.auction.sales[t]?.group === gid ? state.auction.sales[t].amount : 0) - tradeCashFor(t, gid);
+  const teamCard = (t, gid) => {
+    const pt = projections?.teams?.[t] || {};
+    const stake = (owners[t]?.[gid] || 0) / 100;
+    const banked = ((earnedByTeam[t] || 0) / 100) * pot * stake; // approx: assumes the stake was constant
+    const projected = ((pt.totalShare || 0) / 100) * pot * stake;
+    const paid = paidFor(t, gid);
+    return (
+      <div key={t} className={"spot" + (gid === ours ? "" : " rival")}>
+        <div className="spothead"><img src={logo(t)} alt="" /><div><b>{moji(t)} {teams[t].name}</b><div className="dim">{rec(t)}{stake < 1 ? ` · ${fmtPct(stake * 100)} stake` : ""} · net cost {fmt$(paid)}</div></div></div>
+        <div className="spotnums">
+          <div><label>banked</label><b>{fmt$(banked)}</b></div>
+          <div><label>projected</label><b>{fmt$(projected)}</b></div>
+          <div><label>vs paid</label><b className={projected - paid >= 0 ? "green" : "red"}>{projected - paid >= 0 ? "+" : ""}{fmt$(projected - paid)}</b></div>
+        </div>
+      </div>
+    );
+  };
   if (!(seasonStarted || state.auction.phase === "done"))
     return <div className="pad"><p className="dim">Season tracking starts once the draft is complete.</p></div>;
 
@@ -1017,24 +1039,32 @@ function Season({ view }) {
 
       <h2>🧢 Our teams</h2>
       <div className="spots">
-        {myTeams.map(t => {
-          const pt = projections?.teams?.[t] || {};
-          const stake = (owners[t]?.[ours] || 0) / 100;
-          const banked = ((earnedByTeam[t] || 0) / 100) * pot * stake; // approx: assumes our stake was constant
-          const projected = ((pt.totalShare || 0) / 100) * pot * stake;
-          const paid = (state.auction.sales[t]?.group === ours ? state.auction.sales[t].amount : 0) - tradeCashFor(t);
-          return (
-            <div key={t} className="spot">
-              <div className="spothead"><img src={logo(t)} alt="" /><div><b>{moji(t)} {teams[t].name}</b><div className="dim">{rec(t)}{stake < 1 ? ` · ${fmtPct(stake * 100)} stake` : ""} · net cost {fmt$(paid)}</div></div></div>
-              <div className="spotnums">
-                <div><label>banked</label><b>{fmt$(banked)}</b></div>
-                <div><label>projected</label><b>{fmt$(projected)}</b></div>
-                <div><label>vs paid</label><b className={projected - paid >= 0 ? "green" : "red"}>{projected - paid >= 0 ? "+" : ""}{fmt$(projected - paid)}</b></div>
-              </div>
-            </div>
-          );
-        })}
+        {myTeams.map(t => teamCard(t, ours))}
+        {!myTeams.length && <p className="dim">No teams yet.</p>}
       </div>
+
+      <h2>🔭 Everyone else's teams</h2>
+      <p className="dim">Every rival group's roster — what they bought, what they've banked, and what the model projects for them. Same standings order as above.</p>
+      {rivals.map(g => {
+        const held = teamsOf(g.id); const s = summaries[g.id]; const pj = proj[g.id] || {};
+        return (
+          <div key={g.id} className="roster">
+            <div className="rosterhead">
+              <span className="rosteravatars">
+                {membersOf(g.name).map(n => <Avatar key={n} name={n} title={n} size={22} mode="weak" />)}
+              </span>
+              <b>{memberNames(g.name)}</b>
+              <span className="dim">{held.length} team{held.length === 1 ? "" : "s"} · spent {fmt$(s.spent - s.tradeCash)} · banked {fmt$(s.earnedDollars)} · proj. net{" "}
+                <b className={(pj.projectedNet || 0) >= 0 ? "green" : "red"}>{(pj.projectedNet || 0) >= 0 ? "+" : ""}{fmt$(pj.projectedNet || 0)}</b>
+              </span>
+            </div>
+            <div className="spots">
+              {held.map(t => teamCard(t, g.id))}
+              {!held.length && <p className="dim">No teams.</p>}
+            </div>
+          </div>
+        );
+      })}
 
       <h2>📅 Week by week</h2>
       <div className="weeknav">
