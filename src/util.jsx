@@ -63,8 +63,9 @@ function parseHash() {
   const h = location.hash.replace(/^#\/?/, "");
   const [path, ...kv] = h.split("&");
   const [tab, arg] = (path || "").split("/");
-  const q = Object.fromEntries(kv.map(s => s.split("=")).filter(([k, v]) => k && v));
-  return { tab: tab || null, arg: arg ? decodeURIComponent(arg) : null, team: q.team || null, group: q.group || null };
+  const dec = v => { try { return decodeURIComponent(v); } catch { return v; } };
+  const q = Object.fromEntries(kv.map(s => s.split("=")).filter(([k, v]) => k && v).map(([k, v]) => [k, dec(v)]));
+  return { tab: tab || null, arg: arg ? dec(arg) : null, team: q.team || null, group: q.group || null };
 }
 export function useRoute() {
   const [r, setR] = useState(parseHash);

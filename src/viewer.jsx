@@ -116,13 +116,18 @@ function derive(view) {
     return out;
   }
 
+  const bankedBy = (t, gid) => {
+    let sum = 0;
+    for (const w of weeks) for (const g of w.games) for (const c of g.credits || []) if (c.team === t) sum += c.credit * ((c.owners?.[gid] || 0) / 100);
+    return $(sum);
+  };
   const seedOf = t => nflStandings?.teams?.[t]?.seed || null;
   const eventsFor = t => events.filter(e => e.team === t);
   const gamesOf = t => weeks.flatMap(w => w.games.filter(g => g.home === t || g.away === t).map(g => ({ ...g, weekLabel: w.label, weekKey: w.key })));
 
   return {
     view, P, pot, config, groups, weeks, owners, $, color, name, short, vt, teamsOf, paidFor, record, banked$, projected$,
-    doneWeeks, weekEarn, cum, stats, weekTable, recap, credit$, seedOf, eventsFor, gamesOf, isDone, rankLive
+    doneWeeks, weekEarn, cum, stats, weekTable, recap, credit$, seedOf, eventsFor, gamesOf, isDone, rankLive, bankedBy
   };
 }
 
@@ -206,8 +211,8 @@ export function Season({ view, me }) {
   const teamCard = (t, gid) => {
     const pt = projections?.teams?.[t] || {};
     const stake = (owners[t]?.[gid] || 0) / 100;
-    const banked = ((earnedByTeam[t] || 0) / 100) * pot * stake; // approx: assumes the stake was constant
-    const projected = ((pt.totalShare || 0) / 100) * pot * stake;
+    const banked = d.bankedBy(t, gid); // trades aren't retroactive: credits follow ownership at each kickoff
+    const projected = banked + ((pt.futureShare || 0) / 100) * pot * stake;
     const paid = d.paidFor(t, gid);
     return (
       <div key={t} className={"spot" + (gid === me ? "" : " rival")}>
@@ -221,7 +226,8 @@ export function Season({ view, me }) {
     );
   };
   const recap = week ? d.recap(week) : [];
-  const games = (week?.games || []).filter(g => !onlyMine || g.homeOwners?.[me] > 0 || g.awayOwners?.[me] > 0);
+  const mineOnly = onlyMine && !!me;
+  const games = (week?.games || []).filter(g => !mineOnly || g.homeOwners?.[me] > 0 || g.awayOwners?.[me] > 0);
   const byDay = [];
   for (const g of games) { const k = dayLabel(g.date); const last = byDay[byDay.length - 1]; if (last?.day === k) last.games.push(g); else byDay.push({ day: k, games: [g] }); }
 
@@ -301,7 +307,7 @@ export function Season({ view, me }) {
       )}
       {me && week && (
         <div className="row" style={{ justifyContent: "flex-end", margin: ".4rem 0" }}>
-          <button className={"seg" + (onlyMine ? " on" : "")} onClick={() => setOnlyMine(v => !v)}>{onlyMine ? "Showing my games" : "Only my games"}</button>
+          <button className={"seg" + (mineOnly ? " on" : "")} onClick={() => setOnlyMine(v => !v)}>{mineOnly ? "Showing my games" : "Only my games"}</button>
         </div>
       )}
       {byDay.map(day => (
@@ -406,7 +412,7 @@ function Calculator({ d, view }) {
   const pick = t => {
     setTeam(t);
     if (!t) return;
-    setWins(Math.max(d.record(t).w, Math.min(17, Math.round(d.vt(t).expWins ?? d.record(t).w))));
+    setWins(Math.max(d.record(t).w, Math.min(17, Math.round(d.vt(t).expWinsView ?? d.vt(t).expWins ?? d.record(t).w))));
     const p = d.vt(t).pPlayoffs ?? 0;
     setRun(p >= 0.5 ? "wc" : "miss");
   };
@@ -435,7 +441,7 @@ function Calculator({ d, view }) {
         <div><label>Total earned</label><b>{fmt$(total)}</b><span className="dim small">{fmtPct(totalPct)} of the pot · {wins} × {fmt$(d.$(P.regWin))}{bonus ? ` + ${fmt$(d.$(bonus))} playoffs` : ""}</span></div>
         {sale && <div><label>vs auction price ({fmt$(sale.amount)})</label><b className={total - sale.amount >= 0 ? "green" : "red"}>{fmtSigned$(total - sale.amount)}</b><span className="dim small">for {d.name(sale.group)}</span></div>}
       </div>
-      {team && <p className="dim small">Prefilled with {view.teams[team].name}'s projected wins ({(d.vt(team).expWins ?? 0).toFixed(1)}) and {pctRound(d.vt(team).pPlayoffs ?? 0)} playoff odds.</p>}
+      {team && <p className="dim small">Prefilled with {view.teams[team].name}'s projected wins ({(d.vt(team).expWinsView ?? d.vt(team).expWins ?? 0).toFixed(1)}) and {pctRound(d.vt(team).pPlayoffs ?? 0)} playoff odds.</p>}
     </div>
   );
 }

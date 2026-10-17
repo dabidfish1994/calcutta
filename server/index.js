@@ -38,23 +38,46 @@ if (DATA_DIR !== path.join(ROOT, "data")) {
 const DATA = p => path.join(DATA_DIR, p);
 const PORT = process.env.PORT || 4600;
 
-// ---------- admin passcode ----------
+// ---------- admin passcode + sessions ----------
 // The site is public to the whole league; edits (draft fixes, trades, setup) and our private
 // tools (trade finder, transcripts) need the passcode. Only a salted scrypt hash is stored here.
+// The slow scrypt check runs ONLY at sign-in (rate-limited, async, one at a time); after that a
+// device carries an HMAC-signed session token that verifies in microseconds.
 const ADMIN_HASH = { salt: "1baf7745fcfdd42c1462fabfb7674839", dk: "7a6a0b2725d23b04077db682448d82b87b41360b1665b6a6ef285a7b856a1613" };
-const authCache = new Map(); // sha256(key) -> verified?
-function checkKey(key) {
-  if (!key || typeof key !== "string" || key.length > 200) return false;
-  if (process.env.ADMIN_KEY && key === process.env.ADMIN_KEY) return true;
-  const fp = crypto.createHash("sha256").update(key).digest("hex");
-  if (authCache.has(fp)) return authCache.get(fp);
-  const dk = crypto.scryptSync(key, Buffer.from(ADMIN_HASH.salt, "hex"), 32, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
-  const ok = crypto.timingSafeEqual(dk, Buffer.from(ADMIN_HASH.dk, "hex"));
-  if (authCache.size > 500) authCache.clear();
-  authCache.set(fp, ok);
-  return ok;
+const SESSION_SECRET = (() => {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  const f = path.join(DATA_DIR, "session-secret");
+  try { return fs.readFileSync(f, "utf8").trim(); } catch {}
+  const sec = crypto.randomBytes(32).toString("hex");
+  try { fs.writeFileSync(f, sec, { mode: 0o600 }); } catch {}
+  return sec;
+})();
+const SESSION_DAYS = 150;
+const b64u = b => Buffer.from(b).toString("base64url");
+function issueToken() {
+  const body = b64u(JSON.stringify({ exp: Date.now() + SESSION_DAYS * 86400e3 }));
+  return body + "." + crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
 }
-const isAdmin = req => checkKey(req.get("x-admin-key"));
+function verifyToken(tok) {
+  if (typeof tok !== "string" || tok.length > 300 || !/^[\w-]+\.[\w-]+$/.test(tok)) return false;
+  const [body, sig] = tok.split(".");
+  const want = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest();
+  const got = Buffer.from(sig, "base64url");
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return false;
+  try { return JSON.parse(Buffer.from(body, "base64url").toString()).exp > Date.now(); } catch { return false; }
+}
+const isAdmin = req => verifyToken(req.get("x-admin-key"));
+let scryptBusy = false;
+const authTries = new Map(); // ip -> recent attempt timestamps
+function checkPasscode(key) {
+  return new Promise(resolve => {
+    if (!key || typeof key !== "string" || key.length > 200) return resolve(false);
+    if (process.env.ADMIN_KEY && key.length === process.env.ADMIN_KEY.length &&
+      crypto.timingSafeEqual(Buffer.from(key), Buffer.from(process.env.ADMIN_KEY))) return resolve(true);
+    crypto.scrypt(key, Buffer.from(ADMIN_HASH.salt, "hex"), 32, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (err, dk) =>
+      resolve(!err && crypto.timingSafeEqual(dk, Buffer.from(ADMIN_HASH.dk, "hex"))));
+  });
+}
 
 // ---------- persistent state ----------
 const DEFAULT_STATE = {
@@ -422,28 +445,45 @@ function view() {
 }
 // What everyone else in the league sees: no private strategy tools.
 function publicView(full) {
-  const { tradeFinder, undoLabel, ...rest } = full;
-  return { ...rest, tradeFinder: null, undoLabel: null, admin: false };
+  const { tradeFinder, undoLabel, valuation, state, ...rest } = full;
+  const teams = valuation?.teams ? Object.fromEntries(Object.entries(valuation.teams).map(([t, v]) => {
+    const { shareModel, shareMarket, shareSim, shareP10, shareP90, ...keep } = v;
+    return [t, keep];
+  })) : null;
+  const { ourGroupId, priorPot, targetMargin, groups, ...config } = state.config;
+  return {
+    ...rest,
+    valuation: valuation ? { ...valuation, teams } : null,
+    state: { ...state, config: { ...config, groups: groups.map(({ aliases, ...g }) => g) } },
+    tradeFinder: null, undoLabel: null, admin: false
+  };
 }
 
 // ---------- websocket ----------
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
+const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 4096 });
+const clientIp = req => String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "?";
+const wsPerIp = new Map();
 function broadcast() {
   const full = view();
   const adminPayload = JSON.stringify({ type: "view", data: full });
   const publicPayload = JSON.stringify({ type: "view", data: publicView(full) });
   for (const c of wss.clients) if (c.readyState === 1) c.send(c.isAdmin ? adminPayload : publicPayload);
 }
-wss.on("connection", ws => {
+wss.on("connection", (ws, req) => {
+  const ip = clientIp(req);
+  const n = (wsPerIp.get(ip) || 0) + 1;
+  if (n > 25) { ws.close(1013, "too many connections"); return; }
+  wsPerIp.set(ip, n);
+  ws.on("close", () => { const m = (wsPerIp.get(ip) || 1) - 1; m > 0 ? wsPerIp.set(ip, m) : wsPerIp.delete(ip); });
   ws.isAdmin = false;
   ws.send(JSON.stringify({ type: "view", data: publicView(view()) }));
   ws.on("message", raw => {
     if (raw.length > 1000) return;
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (msg?.type === "auth") {
-      ws.isAdmin = checkKey(msg.key);
+      ws.isAdmin = verifyToken(msg.key);
       ws.send(JSON.stringify({ type: "auth", ok: ws.isAdmin }));
       const full = view();
       ws.send(JSON.stringify({ type: "view", data: ws.isAdmin ? full : publicView(full) }));
@@ -674,7 +714,20 @@ const actions = {
 
 app.use(express.json());
 app.get("/api/view", (req, res) => { const full = view(); res.json(isAdmin(req) ? full : publicView(full)); });
-app.post("/api/auth", (req, res) => res.json({ admin: checkKey(req.body?.key) }));
+app.set("trust proxy", 1);
+app.post("/api/auth", async (req, res) => {
+  const now = Date.now(), ip = req.ip || "?";
+  const recent = (authTries.get(ip) || []).filter(t => now - t < 60e3);
+  if (recent.length >= 5) return res.status(429).json({ admin: false, error: "Too many tries — wait a minute." });
+  recent.push(now); authTries.set(ip, recent);
+  if (authTries.size > 5000) authTries.clear();
+  if (scryptBusy) return res.status(429).json({ admin: false, error: "Busy — try again in a second." });
+  scryptBusy = true;
+  try {
+    const ok = await checkPasscode(req.body?.key);
+    res.json(ok ? { admin: true, token: issueToken() } : { admin: false });
+  } finally { scryptBusy = false; }
+});
 app.post("/api/action", (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ ok: false, error: "View-only — unlock with the commissioner code to make changes." });
   const { type, ...payload } = req.body || {};

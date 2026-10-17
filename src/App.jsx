@@ -9,15 +9,21 @@ function useLive(onTranscript) {
   const [tick, setTick] = useState(0); // bump to reconnect after unlocking/locking
   const cbRef = useRef(onTranscript);
   cbRef.current = onTranscript;
+  const viewRef = useRef(null);
+  viewRef.current = view;
   useEffect(() => {
     let ws, closed = false, retry;
     const connect = () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${proto}://${location.host}/ws`);
-      ws.onopen = () => { const k = getAdminKey(); if (k) ws.send(JSON.stringify({ type: "auth", key: k })); };
+      let authPending = false;
+      ws.onopen = () => { const k = getAdminKey(); if (k) { authPending = true; ws.send(JSON.stringify({ type: "auth", key: k })); } };
       ws.onmessage = e => {
         const msg = JSON.parse(e.data);
-        if (msg.type === "view") setView(msg.data);
+        if (msg.type === "auth") { authPending = false; if (!msg.ok) setAdminKey(""); } // expired session: fall back to viewer
+        // A reconnecting admin device gets one public frame before its session is re-checked; skip it
+        // so open edit forms don't unmount.
+        if (msg.type === "view" && !(authPending && !msg.data.admin && viewRef.current?.admin)) setView(msg.data);
         if (msg.type === "transcript") cbRef.current?.(msg.line);
       };
       ws.onclose = () => { if (!closed) retry = setTimeout(connect, 1500); };
@@ -109,7 +115,7 @@ function Unlock({ onDone }) {
     e.preventDefault(); setBusy(true); setErr(null);
     const r = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) }).then(r => r.json()).catch(() => null);
     setBusy(false);
-    if (r?.admin) { setAdminKey(key); onDone(true); } else setErr("That code didn't work.");
+    if (r?.admin && r.token) { setAdminKey(r.token); onDone(true); } else setErr(r?.error || "That code didn't work.");
   };
   return (
     <div className="sheetback" onClick={() => onDone(false)}>
@@ -935,7 +941,7 @@ function Odds({ view }) {
             <tr key={t}>
               <td><img className="tinylogo" src={logo(t)} alt="" /> {moji(t)} {teams[t].name} {disagree(v) && <em className="amber" title={`market P(playoffs) ${pct(v.market.pPlayoff)} vs model ${pct(v.sim.pPlayoff)}; market P(SB) ${pct1(v.market.pSb)} vs model ${pct1(v.sim.pSb)}`}>⚡</em>}</td>
               <td className="r">{v.market.winTotal ?? "—"}</td>
-              <td className="r">{v.expWins.toFixed(1)}</td>
+              <td className="r">{(v.expWinsView ?? v.expWins).toFixed(1)}</td>
               <td className="r">{pct(v.pPlayoffs)}<div className="subodds">{american(v.market.playoffOdds)} · sim {pct(v.sim.pPlayoff)}</div></td>
               <td className="r">{pct(v.pDivTitle)}<div className="subodds">{american(v.market.divisionOdds)}</div></td>
               <td className="r">{pct1(v.pSbWin)}<div className="subodds">{american(v.market.sbOdds)} · sim {pct1(v.sim.pSb)}</div></td>
