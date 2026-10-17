@@ -5,10 +5,12 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import http from "http";
 import fs from "fs";
+import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import { TEAMS, TEAM_IDS } from "../engine/teams.js";
-import { valuate, VALUATION_VERSION } from "../engine/sim.js";
+import { valuate, VALUATION_VERSION, winProb, HFA } from "../engine/sim.js";
+import { fetchStandings } from "../engine/fetch-standings.js";
 import { fetchAndCache } from "../engine/fetch-schedule.js";
 import { loadProfiles, resolveProfile } from "../engine/payouts.js";
 import { fetchOdds } from "../engine/fetch-odds.js";
@@ -35,6 +37,24 @@ if (DATA_DIR !== path.join(ROOT, "data")) {
 }
 const DATA = p => path.join(DATA_DIR, p);
 const PORT = process.env.PORT || 4600;
+
+// ---------- admin passcode ----------
+// The site is public to the whole league; edits (draft fixes, trades, setup) and our private
+// tools (trade finder, transcripts) need the passcode. Only a salted scrypt hash is stored here.
+const ADMIN_HASH = { salt: "1baf7745fcfdd42c1462fabfb7674839", dk: "7a6a0b2725d23b04077db682448d82b87b41360b1665b6a6ef285a7b856a1613" };
+const authCache = new Map(); // sha256(key) -> verified?
+function checkKey(key) {
+  if (!key || typeof key !== "string" || key.length > 200) return false;
+  if (process.env.ADMIN_KEY && key === process.env.ADMIN_KEY) return true;
+  const fp = crypto.createHash("sha256").update(key).digest("hex");
+  if (authCache.has(fp)) return authCache.get(fp);
+  const dk = crypto.scryptSync(key, Buffer.from(ADMIN_HASH.salt, "hex"), 32, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  const ok = crypto.timingSafeEqual(dk, Buffer.from(ADMIN_HASH.dk, "hex"));
+  if (authCache.size > 500) authCache.clear();
+  authCache.set(fp, ok);
+  return ok;
+}
+const isAdmin = req => checkKey(req.get("x-admin-key"));
 
 // ---------- persistent state ----------
 const DEFAULT_STATE = {
@@ -80,6 +100,7 @@ let valuation = fs.existsSync(DATA("valuation.json"))
   : null;
 
 let profiles = loadProfiles(DATA_DIR);
+let nflStandings = (() => { try { return JSON.parse(fs.readFileSync(DATA("standings-2026.json"), "utf8")); } catch { return null; } })();
 
 let saveTimer = null;
 function persist() {
@@ -200,8 +221,10 @@ function seasonSummary(events, pot) {
     const credits = {};
     for (const ev of events) if (ev.ts === g.date && (ev.team === g.home || ev.team === g.away)) credits[ev.team] = (credits[ev.team] || 0) + ev.credit;
     weeksMap.get(key).games.push({
-      id: g.id, date: g.date, home: g.home, away: g.away, homeScore: g.homeScore, awayScore: g.awayScore,
+      id: g.id, date: g.date, seasontype: g.seasontype, week: g.week, home: g.home, away: g.away, homeScore: g.homeScore, awayScore: g.awayScore,
       final: !!g.final, state: g.state || (g.final ? "post" : "pre"), timeValid: g.timeValid !== false, winner,
+      shortDetail: g.shortDetail || null, neutral: !!g.neutral,
+      pHome: !g.final && valuation?.ratings?.[g.home] != null ? winProb(valuation.ratings[g.home], valuation.ratings[g.away], g.neutral ? 0 : HFA) : null,
       credits: Object.entries(credits).map(([team, credit]) => ({ team, credit, owners: ownershipAt(team, g.date) })),
       homeOwners: ownershipAt(g.home, g.date), awayOwners: ownershipAt(g.away, g.date)
     });
@@ -391,8 +414,16 @@ function view() {
     earnedByTeam: gs.earnedByTeam,
     scheduleFetchedAt: schedule?.fetchedAt || null,
     undoLabel: undoStack.length ? undoStack[undoStack.length - 1].label ?? null : null,
-    scoringProfile: { active: profiles.active, label: profiles.profiles[profiles.active]?.label || profiles.active, options: Object.fromEntries(Object.entries(profiles.profiles).map(([k, v]) => [k, v.label])) }
+    scoringProfile: { active: profiles.active, label: profiles.profiles[profiles.active]?.label || profiles.active, options: Object.fromEntries(Object.entries(profiles.profiles).map(([k, v]) => [k, v.label])) },
+    payoutProfile: resolveProfile(profiles),
+    nflStandings,
+    admin: true
   };
+}
+// What everyone else in the league sees: no private strategy tools.
+function publicView(full) {
+  const { tradeFinder, undoLabel, ...rest } = full;
+  return { ...rest, tradeFinder: null, undoLabel: null, admin: false };
 }
 
 // ---------- websocket ----------
@@ -400,10 +431,25 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 function broadcast() {
-  const payload = JSON.stringify({ type: "view", data: view() });
-  for (const c of wss.clients) if (c.readyState === 1) c.send(payload);
+  const full = view();
+  const adminPayload = JSON.stringify({ type: "view", data: full });
+  const publicPayload = JSON.stringify({ type: "view", data: publicView(full) });
+  for (const c of wss.clients) if (c.readyState === 1) c.send(c.isAdmin ? adminPayload : publicPayload);
 }
-wss.on("connection", ws => ws.send(JSON.stringify({ type: "view", data: view() })));
+wss.on("connection", ws => {
+  ws.isAdmin = false;
+  ws.send(JSON.stringify({ type: "view", data: publicView(view()) }));
+  ws.on("message", raw => {
+    if (raw.length > 1000) return;
+    let msg; try { msg = JSON.parse(raw); } catch { return; }
+    if (msg?.type === "auth") {
+      ws.isAdmin = checkKey(msg.key);
+      ws.send(JSON.stringify({ type: "auth", ok: ws.isAdmin }));
+      const full = view();
+      ws.send(JSON.stringify({ type: "view", data: ws.isAdmin ? full : publicView(full) }));
+    }
+  });
+});
 
 // ---------- background: auto score sync + revaluation ----------
 let revaluing = false;
@@ -412,6 +458,10 @@ async function syncScores({ force = false } = {}) {
     const before = schedule ? schedule.games.filter(g => g.final).length : -1;
     schedule = await fetchAndCache();
     const after = schedule.games.filter(g => g.final).length;
+    try {
+      nflStandings = await fetchStandings();
+      fs.writeFileSync(DATA("standings-2026.json"), JSON.stringify(nflStandings, null, 1));
+    } catch (e) { console.error("standings fetch failed:", e.message); }
     // Recompute when the code version OR any valuation input (lines, odds, active profile) changed.
     const effective = JSON.stringify([
       (() => { try { return JSON.parse(fs.readFileSync(DATA("win-totals-2026.json"), "utf8")); } catch { return null; } })(),
@@ -623,8 +673,10 @@ const actions = {
 };
 
 app.use(express.json());
-app.get("/api/view", (_req, res) => res.json(view()));
+app.get("/api/view", (req, res) => { const full = view(); res.json(isAdmin(req) ? full : publicView(full)); });
+app.post("/api/auth", (req, res) => res.json({ admin: checkKey(req.body?.key) }));
 app.post("/api/action", (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ ok: false, error: "View-only — unlock with the commissioner code to make changes." });
   const { type, ...payload } = req.body || {};
   const fn = actions[type];
   if (!fn) return res.status(400).json({ error: `Unknown action: ${type}` });
@@ -633,13 +685,20 @@ app.post("/api/action", (req, res) => {
   broadcast();
   res.json({ ok: !result.error, ...result });
 });
-app.post("/api/sync", async (_req, res) => res.json(await syncScores({ force: !!_req.body?.force })));
+let lastPublicSync = 0;
+app.post("/api/sync", async (req, res) => {
+  if (isAdmin(req)) return res.json(await syncScores({ force: !!req.body?.force }));
+  if (Date.now() - lastPublicSync < 120e3) return res.json({ ok: true, skipped: true });
+  lastPublicSync = Date.now();
+  res.json(await syncScores());
+});
 
 // ---------- transcript log: every finalized speech segment, persisted to disk ----------
 const TDIR = DATA("transcripts");
 fs.mkdirSync(TDIR, { recursive: true });
 const tFile = () => path.join(TDIR, `${new Date().toISOString().slice(0, 10)}.jsonl`);
 app.post("/api/transcript", (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: "admin only" });
   const line = {
     ts: new Date().toISOString(),
     text: String(req.body?.text || "").slice(0, 500),
@@ -650,10 +709,11 @@ app.post("/api/transcript", (req, res) => {
   if (!line.text) return res.status(400).json({ error: "empty" });
   fs.appendFileSync(tFile(), JSON.stringify(line) + "\n");
   const payload = JSON.stringify({ type: "transcript", line });
-  for (const c of wss.clients) if (c.readyState === 1) c.send(payload);
+  for (const c of wss.clients) if (c.readyState === 1 && c.isAdmin) c.send(payload);
   res.json({ ok: true });
 });
-app.get("/api/transcript", (_req, res) => {
+app.get("/api/transcript", (req, res) => {
+  if (!isAdmin(req)) return res.json({ lines: [] });
   const lines = fs.existsSync(tFile())
     ? fs.readFileSync(tFile(), "utf8").trim().split("\n").slice(-80).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
     : [];

@@ -1,30 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, membersOf } from "./avatars.jsx";
 
-const fmt$ = n => "$" + Math.round(n).toLocaleString();
-const fmtPct = p => `${Math.round(p * 10) / 10}%`;
-const logo = abbr => `https://a.espncdn.com/i/teamlogos/nfl/500/${abbr.toLowerCase()}.png`;
-
-// Every team gets a mascot. Non-negotiable.
-const MOJI = {
-  BUF: "🦬", MIA: "🐬", NE: "🎩", NYJ: "✈️", BAL: "🐦‍⬛", CIN: "🐅", CLE: "🐶", PIT: "🛠️",
-  HOU: "🤠", IND: "🐴", JAX: "🐆", TEN: "⚔️", DEN: "🐎", KC: "🏹", LV: "🎰", LAC: "⚡",
-  DAL: "⭐", NYG: "🗽", PHI: "🦅", WSH: "🎖️", CHI: "🐻", DET: "🦁", GB: "🧀", MIN: "🪓",
-  ATL: "🐦", NO: "⚜️", TB: "🏴‍☠️", CAR: "🐈‍⬛", ARI: "🌵", LAR: "🐏", SF: "⛏️", SEA: "🌊"
-};
-const moji = t => MOJI[t] || "🏈";
-
-async function act(type, payload = {}) {
-  const res = await fetch("/api/action", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type, ...payload })
-  });
-  return res.json();
-}
+import { fmt$, fmtPct, logo, moji, act, shortName, memberNames, groupName, getAdminKey, setAdminKey, useMe, useRoute } from "./util.jsx";
+import { Week, Standings, Teams, Rules, TeamSheet, GroupSheet, WhoAreYou, PlayoffPicture } from "./viewer.jsx";
 
 function useLive(onTranscript) {
   const [view, setView] = useState(null);
+  const [tick, setTick] = useState(0); // bump to reconnect after unlocking/locking
   const cbRef = useRef(onTranscript);
   cbRef.current = onTranscript;
   useEffect(() => {
@@ -32,6 +14,7 @@ function useLive(onTranscript) {
     const connect = () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onopen = () => { const k = getAdminKey(); if (k) ws.send(JSON.stringify({ type: "auth", key: k })); };
       ws.onmessage = e => {
         const msg = JSON.parse(e.data);
         if (msg.type === "view") setView(msg.data);
@@ -40,48 +23,114 @@ function useLive(onTranscript) {
       ws.onclose = () => { if (!closed) retry = setTimeout(connect, 1500); };
     };
     connect();
-    fetch("/api/view").then(r => r.json()).then(setView).catch(() => {});
+    fetch("/api/view", { headers: { "x-admin-key": getAdminKey() } }).then(r => r.json()).then(setView).catch(() => {});
     return () => { closed = true; clearTimeout(retry); ws?.close(); };
-  }, []);
-  return view;
+  }, [tick]);
+  return [view, () => setTick(t => t + 1)];
 }
 
-const TABS = ["Draft", "Board", "Odds", "Season", "Trades", "Setup"];
-const TAB_MOJI = { Draft: "🔨", Board: "📋", Odds: "🎲", Season: "🏈", Trades: "🤝", Setup: "⚙️" };
+const VIEW_TABS = [
+  { id: "week", label: "Week", icon: "📅" },
+  { id: "standings", label: "Standings", icon: "🏆" },
+  { id: "teams", label: "Teams", icon: "🏈" },
+  { id: "odds", label: "Odds", icon: "🎲" },
+  { id: "rules", label: "Rules", icon: "📜" }
+];
+const ADMIN_TAB = { id: "admin", label: "War room", icon: "🔒" };
 
 export default function App() {
-  const [tabSel, setTab] = useState(null);
   const [lines, setLines] = useState([]);
-  const view = useLive(line => setLines(l => [...l.slice(-79), line]));
+  const [view, reconnect] = useLive(line => setLines(l => [...l.slice(-79), line]));
+  const [route, go] = useRoute();
+  const [me, setMe] = useMe(view);
+  const [picking, setPicking] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
+  useEffect(() => { window.scrollTo(0, 0); }, [route.tab]);
   useEffect(() => {
-    fetch("/api/transcript").then(r => r.json()).then(d => setLines(d.lines || [])).catch(() => {});
-  }, []);
-  if (!view) return <div className="loading">🏈 Connecting to the war room…</div>;
+    if (view?.admin) fetch("/api/transcript", { headers: { "x-admin-key": getAdminKey() } }).then(r => r.json()).then(d => setLines(d.lines || [])).catch(() => {});
+  }, [view?.admin]);
+  if (!view) return <div className="loading">🏈 Loading the Cardinal Calcutta…</div>;
+  const admin = !!view.admin;
   const seasonOn = !!view.seasonStarted || view.state.auction.phase === "done";
   if (seasonOn) { try { localStorage.setItem("cc-listen", "0"); } catch {} }
-  const tab = tabSel ?? (seasonOn ? "Season" : "Draft");
-  const Comp = { Draft, Board, Odds, Season, Trades, Setup }[tab];
+  const tabs = admin ? [...VIEW_TABS, ADMIN_TAB] : VIEW_TABS;
+  const tab = tabs.some(t => t.id === route.tab) ? route.tab : (!seasonOn && admin ? "admin" : "week");
+  const askWho = seasonOn && (me === undefined || picking);
+  const meName = me ? view.state.config.groups.find(g => g.id === me)?.name : null;
+  let body;
+  if (!seasonOn && tab !== "admin") body = <div className="pad"><h1 className="pagetitle">Draft hasn't happened yet</h1><p className="dim">Standings and weekly results show up here once the auction is done.</p></div>;
+  else if (tab === "week") body = <Week view={view} me={me} route={route} go={go} />;
+  else if (tab === "standings") body = <Standings view={view} me={me} go={go} />;
+  else if (tab === "teams") body = <Teams view={view} me={me} go={go} />;
+  else if (tab === "odds") body = <Odds view={view} me={me} go={go} />;
+  else if (tab === "rules") body = <Rules view={view} me={me} go={go} />;
+  else body = <AdminHub view={view} lines={lines} route={route} go={go} />;
   return (
     <div className="app">
       <header className="topbar">
-        <span className="brand">
-          🏈 Cardinal War Room
-          <span className="crew">
-            {membersOf(view.state.config.groups.find(g => g.id === view.state.config.ourGroupId)?.name).map(n => (
-              <Avatar key={n} name={n} title={n} size={22} mode="hero" />
-            ))}
-          </span>
-        </span>
-        <PotBadge view={view} />
+        <a className="brand" href="#/week">🏈 <span>Cardinal Calcutta</span></a>
+        <div className="topright">
+          {seasonOn ? <span className="potbadge">pot <b>{fmt$(view.potForSettlement)}</b></span> : <PotBadge view={view} />}
+          {seasonOn && (
+            <button className="mebtn" onClick={() => setPicking(true)} aria-label={meName ? `Viewing as ${memberNames(meName)} — change` : "Pick your group"}>
+              {meName ? <span className="crew">{membersOf(meName).map(n => <Avatar key={n} name={n} title={n} size={22} mode="hero" />)}</span> : <span>Pick your group</span>}
+              <span aria-hidden="true">▾</span>
+            </button>
+          )}
+          <button className={"lockbtn" + (admin ? " on" : "")} title={admin ? "War room unlocked — tap to lock this device" : "Commissioner unlock"}
+            onClick={() => { if (admin) { setAdminKey(""); reconnect(); if (route.tab === "admin") go({ tab: "week", arg: null }); } else setUnlocking(true); }}>
+            {admin ? "🔓" : "🔒"}
+          </button>
+        </div>
       </header>
-      <main><Comp view={view} lines={lines} /></main>
+      <main>{body}</main>
       <nav className="tabs">
-        {TABS.map(t => (
-          <button key={t} className={t === tab ? "on" : ""} onClick={() => setTab(t)}>
-            <span className="tabmoji">{TAB_MOJI[t]}</span> {t}
+        {tabs.map(t => (
+          <button key={t.id} className={t.id === tab ? "on" : ""} aria-current={t.id === tab ? "page" : undefined} onClick={() => go({ tab: t.id, arg: null, team: null, group: null })}>
+            <span className="tabmoji">{t.icon}</span> {t.label}
           </button>
         ))}
       </nav>
+      {route.team && seasonOn && <TeamSheet view={view} team={route.team} me={me} go={go} />}
+      {route.group && seasonOn && <GroupSheet view={view} gid={route.group} me={me} go={go} />}
+      {askWho && <WhoAreYou view={view} me={me} onPick={g => { setMe(g); setPicking(false); }} onClose={() => { if (me === undefined) setMe("none"); setPicking(false); }} />}
+      {unlocking && <Unlock onDone={ok => { setUnlocking(false); if (ok) reconnect(); }} />}
+    </div>
+  );
+}
+
+function Unlock({ onDone }) {
+  const [key, setKey] = useState("");
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async e => {
+    e.preventDefault(); setBusy(true); setErr(null);
+    const r = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) }).then(r => r.json()).catch(() => null);
+    setBusy(false);
+    if (r?.admin) { setAdminKey(key); onDone(true); } else setErr("That code didn't work.");
+  };
+  return (
+    <div className="sheetback" onClick={() => onDone(false)}>
+      <form className="sheet who" role="dialog" aria-modal="true" aria-label="Commissioner unlock" onClick={e => e.stopPropagation()} onSubmit={submit}>
+        <h2>🔒 War room</h2>
+        <p className="dim small">Editing (draft fixes, trades, setup) and our private tools need the code. Everything else is open to the league.</p>
+        <input type="password" autoFocus autoComplete="current-password" value={key} onChange={e => setKey(e.target.value)} placeholder="code" aria-label="Code" />
+        {err && <p className="red small">{err}</p>}
+        <div className="row gap"><button className="go" disabled={busy || !key}>{busy ? "Checking…" : "Unlock"}</button><button type="button" onClick={() => onDone(false)}>Cancel</button></div>
+      </form>
+    </div>
+  );
+}
+
+function AdminHub({ view, lines, route, go }) {
+  const SUBS = [["trades", "Trades"], ["board", "Draft board"], ["draft", "Draft console"], ["setup", "Setup"]];
+  const sub = SUBS.some(([k]) => k === route.arg) ? route.arg : "trades";
+  return (
+    <div>
+      <div className="pad" style={{ paddingBottom: 0 }}>
+        <div className="segrow">{SUBS.map(([k, l]) => <button key={k} className={"seg" + (sub === k ? " on" : "")} onClick={() => go({ arg: k })}>{l}</button>)}</div>
+      </div>
+      {sub === "trades" ? <Trades view={view} /> : sub === "board" ? <Board view={view} /> : sub === "draft" ? <Draft view={view} lines={lines} /> : <Setup view={view} />}
     </div>
   );
 }
@@ -674,21 +723,6 @@ function Draft({ view, lines }) {
   );
 }
 
-function shortName(name) {
-  if (!name) return "?";
-  const first = name.split(/[\s(/]+/)[0];
-  return first.length > 8 ? first.slice(0, 8) : first;
-}
-// "Us (Fish/Joon/Gunther)" -> "Fish · Joon · Gunther"; "Mark/Fuller" -> "Mark · Fuller"
-function memberNames(name) {
-  if (!name) return "?";
-  const m = name.match(/\(([^)]+)\)/);
-  const core = m ? m[1] : name;
-  const parts = core.split(/[/,+&]+/).map(s => s.trim()).filter(Boolean);
-  return parts.length > 1 ? parts.join(" · ") : name;
-}
-const groupName = (config, id) => config.groups.find(g => g.id === id)?.name || id;
-
 function GroupsPanel({ view }) {
   const { state, summaries } = view;
   const { sales } = state.auction;
@@ -879,8 +913,10 @@ const american = o => (o == null ? "—" : o > 0 ? `+${o}` : `${o}`);
 const pct = p => `${Math.round(p * 100)}%`;
 const pct1 = p => `${(p * 100).toFixed(1)}%`;
 
-function Odds({ view }) {
+function Odds({ view, me, go }) {
   const { teams, valuation, repricing } = view;
+  const inSeason = !!view.seasonStarted || view.state.auction.phase === "done";
+  const money = t => inSeason ? ((valuation.teams[t]?.share || 0) / 100) * view.potForSettlement : (repricing.fair[t] || 0);
   if (!valuation?.teams || !Object.values(valuation.teams)[0]?.market)
     return <div className="pad"><p className="dim">Market blend still computing — refresh in a minute.</p></div>;
   const rows = Object.keys(teams)
@@ -896,26 +932,31 @@ function Odds({ view }) {
   const ROUNDS = [["wc", "Wild Card"], ["div", "Divisional"], ["conf", "Conference Championships"], ["sb", "Super Bowl"]];
   return (
     <div className="pad">
+      {inSeason && view.nflStandings && (<>
+        <h1 className="pagetitle">Playoff picture</h1>
+        <p className="dim small">Seeds if the season ended today (ESPN standings), with each team's owner and the simulation's playoff odds.</p>
+        <PlayoffPicture view={view} me={me} go={go} />
+        <h2>🎲 Odds for every team</h2>
+      </>)}
       <p className="dim">
-        Priced under: <b>{view.scoringProfile?.label}</b>. Sportsbook futures (de-vigged) blended into the
-        sim at <b>{wPct}% market weight</b> — the weight decays automatically as real games are played.
-        ⚡ = market and model disagree; that's where auction edges live.
+        Sportsbook futures (de-vigged) blended into the season simulation at <b>{wPct}% market weight</b>. The weight shrinks as
+        real games are played, so by December the numbers run almost entirely on actual results. ⚡ = sportsbooks and the model disagree.
       </p>
       <div className="tablewrap"><table className="tbl">
         <thead><tr>
           <th>Team</th><th className="r">O/U</th><th className="r">E[W]</th>
-          <th className="r">Playoffs</th><th className="r">Division</th><th className="r">Super Bowl</th><th className="r">Fair</th>
+          <th className="r">Playoffs</th><th className="r">Division</th><th className="r">Super Bowl</th><th className="r">{inSeason ? "Proj. $" : "Fair"}</th>
         </tr></thead>
         <tbody>
           {rows.map(({ t, v }) => (
             <tr key={t}>
-              <td><img className="tinylogo" src={logo(t)} alt="" /> {moji(t)} {teams[t].name} {disagree(v) && <em className="amber" title={`market P(playoffs) ${pct(v.market.pPlayoff)} vs model ${pct(v.sim.pPlayoff)}; market P(SB) ${pct1(v.market.pSb)} vs model ${pct1(v.sim.pSb)}`}>⚡</em>}</td>
+              <td className={inSeason ? "click" : ""} onClick={inSeason ? () => go({ team: t, group: null }) : undefined}><img className="tinylogo" src={logo(t)} alt="" /> {moji(t)} {teams[t].name} {disagree(v) && <em className="amber" title={`market P(playoffs) ${pct(v.market.pPlayoff)} vs model ${pct(v.sim.pPlayoff)}; market P(SB) ${pct1(v.market.pSb)} vs model ${pct1(v.sim.pSb)}`}>⚡</em>}</td>
               <td className="r">{v.market.winTotal ?? "—"}</td>
               <td className="r">{v.expWins.toFixed(1)}</td>
               <td className="r">{pct(v.pPlayoffs)}<div className="subodds">{american(v.market.playoffOdds)} · sim {pct(v.sim.pPlayoff)}</div></td>
               <td className="r">{pct(v.pDivTitle)}<div className="subodds">{american(v.market.divisionOdds)}</div></td>
               <td className="r">{pct1(v.pSbWin)}<div className="subodds">{american(v.market.sbOdds)} · sim {pct1(v.sim.pSb)}</div></td>
-              <td className="r"><b>{fmt$(repricing.fair[t] || 0)}</b></td>
+              <td className="r"><b>{fmt$(money(t))}</b></td>
             </tr>
           ))}
         </tbody>
@@ -947,157 +988,6 @@ function Odds({ view }) {
     </div>
   );
 }
-
-// ---------------- SEASON (week-by-week tracker) ----------------
-const kickoff = iso => new Date(iso).toLocaleString([], { weekday: "short", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" });
-
-function OwnerTags({ own, config }) {
-  const entries = Object.entries(own || {}).filter(([, p]) => p > 0);
-  if (!entries.length) return <span className="otag none">unowned</span>;
-  return <>{entries.map(([gid, p]) => (
-    <span key={gid} className={"otag" + (gid === config.ourGroupId ? " ours" : "")}>
-      {shortName(groupName(config, gid))}{p < 100 ? ` ${fmtPct(p)}` : ""}
-    </span>
-  ))}</>;
-}
-
-function Season({ view }) {
-  const { state, teams, summaries, projections, season, earnedByTeam, potForSettlement, scheduleFetchedAt, valuation, seasonStarted } = view;
-  const [syncing, setSyncing] = useState(false);
-  const [wkSel, setWkSel] = useState(null);
-  const config = state.config;
-  const ours = config.ourGroupId;
-  const pot = potForSettlement;
-  const weeks = season?.weeks || [];
-  const curKey = wkSel || season?.currentWeek || weeks[0]?.key;
-  const week = weeks.find(w => w.key === curKey);
-  const proj = projections?.groups || {};
-  const groups = [...config.groups].sort((a, b) => (proj[b.id]?.projectedNet ?? 0) - (proj[a.id]?.projectedNet ?? 0));
-  const weekEarned = gid => season?.byGroupWeek?.[gid]?.[curKey] || 0;
-  const rec = t => { const r = season?.teamRecord?.[t]; return r ? `${r.w}-${r.l}${r.t ? `-${r.t}` : ""}` : "0-0"; };
-
-  const nowWeek = weeks.find(w => w.key === season?.currentWeek);
-  const owners = projections?.currentOwners || {};
-  // Teams a group currently holds any stake in, best-valued first.
-  const teamsOf = gid => Object.keys(owners).filter(t => (owners[t]?.[gid] || 0) > 0)
-    .sort((a, b) => (valuation?.teams?.[b]?.share || 0) - (valuation?.teams?.[a]?.share || 0));
-  const myTeams = teamsOf(ours);
-  const rivals = groups.filter(g => g.id !== ours);
-  const tradeCashFor = (t, gid) => state.trades.reduce((sum, tr) => tr.team !== t ? sum : sum + (tr.from === gid ? tr.cash : 0) - (tr.to === gid ? tr.cash : 0), 0);
-  // Net cost of a team to a group: auction price (if they bought it) minus trade cash received, plus trade cash paid.
-  const paidFor = (t, gid) => (state.auction.sales[t]?.group === gid ? state.auction.sales[t].amount : 0) - tradeCashFor(t, gid);
-  const teamCard = (t, gid) => {
-    const pt = projections?.teams?.[t] || {};
-    const stake = (owners[t]?.[gid] || 0) / 100;
-    const banked = ((earnedByTeam[t] || 0) / 100) * pot * stake; // approx: assumes the stake was constant
-    const projected = ((pt.totalShare || 0) / 100) * pot * stake;
-    const paid = paidFor(t, gid);
-    return (
-      <div key={t} className={"spot" + (gid === ours ? "" : " rival")}>
-        <div className="spothead"><img src={logo(t)} alt="" /><div><b>{moji(t)} {teams[t].name}</b><div className="dim">{rec(t)}{stake < 1 ? ` · ${fmtPct(stake * 100)} stake` : ""} · net cost {fmt$(paid)}</div></div></div>
-        <div className="spotnums">
-          <div><label>banked</label><b>{fmt$(banked)}</b></div>
-          <div><label>projected</label><b>{fmt$(projected)}</b></div>
-          <div><label>vs paid</label><b className={projected - paid >= 0 ? "green" : "red"}>{projected - paid >= 0 ? "+" : ""}{fmt$(projected - paid)}</b></div>
-        </div>
-      </div>
-    );
-  };
-  if (!(seasonStarted || state.auction.phase === "done"))
-    return <div className="pad"><p className="dim">Season tracking starts once the draft is complete.</p></div>;
-
-  return (
-    <div className="pad">
-      <div className="statline">
-        <span>pot <b>{fmt$(pot)}</b>{nowWeek ? <> · now: <b>{nowWeek.label}</b></> : null}</span>
-        <button disabled={syncing} onClick={async () => { setSyncing(true); await fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: true }) }); setSyncing(false); }}>
-          {syncing ? "Syncing…" : "Sync scores now"}
-        </button>
-      </div>
-      <p className="dim">Scores sync from ESPN every hour (last pull {scheduleFetchedAt ? new Date(scheduleFetchedAt).toLocaleString() : "—"}). Projected = banked so far + the engine's re-simulated remaining season, re-fit to real results.</p>
-
-      <h2>🏆 Standings</h2>
-      <div className="tablewrap"><table className="tbl">
-        <thead><tr><th>Group</th><th className="r">Teams</th><th className="r">Banked</th><th className="r">Projected</th><th className="r">Net cost</th><th className="r">Proj. net</th><th className="r">{week?.label || "Week"}</th></tr></thead>
-        <tbody>
-          {groups.map(g => {
-            const s = summaries[g.id]; const pj = proj[g.id] || {};
-            return (
-              <tr key={g.id} className={g.id === ours ? "hl" : ""}>
-                <td>{memberNames(g.name)}</td>
-                <td className="r">{Object.keys(owners).filter(t => (owners[t]?.[g.id] || 0) > 0).length}</td>
-                <td className="r">{fmt$(s.earnedDollars)}</td>
-                <td className="r">{fmt$(pj.projectedEarned || 0)}</td>
-                <td className="r" title="auction spend minus trade cash received">{fmt$(s.spent - s.tradeCash)}</td>
-                <td className={"r " + ((pj.projectedNet || 0) >= 0 ? "green" : "red")}><b>{(pj.projectedNet || 0) >= 0 ? "+" : ""}{fmt$(pj.projectedNet || 0)}</b></td>
-                <td className="r">{weekEarned(g.id) ? fmt$(weekEarned(g.id)) : "—"}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table></div>
-
-      <h2>🧢 Our teams</h2>
-      <div className="spots">
-        {myTeams.map(t => teamCard(t, ours))}
-        {!myTeams.length && <p className="dim">No teams yet.</p>}
-      </div>
-
-      <h2>🔭 Everyone else's teams</h2>
-      <p className="dim">Every rival group's roster — what they bought, what they've banked, and what the model projects for them. Same standings order as above.</p>
-      {rivals.map(g => {
-        const held = teamsOf(g.id); const s = summaries[g.id]; const pj = proj[g.id] || {};
-        return (
-          <div key={g.id} className="roster">
-            <div className="rosterhead">
-              <span className="rosteravatars">
-                {membersOf(g.name).map(n => <Avatar key={n} name={n} title={n} size={22} mode="weak" />)}
-              </span>
-              <b>{memberNames(g.name)}</b>
-              <span className="dim">{held.length} team{held.length === 1 ? "" : "s"} · spent {fmt$(s.spent - s.tradeCash)} · banked {fmt$(s.earnedDollars)} · proj. net{" "}
-                <b className={(pj.projectedNet || 0) >= 0 ? "green" : "red"}>{(pj.projectedNet || 0) >= 0 ? "+" : ""}{fmt$(pj.projectedNet || 0)}</b>
-              </span>
-            </div>
-            <div className="spots">
-              {held.map(t => teamCard(t, g.id))}
-              {!held.length && <p className="dim">No teams.</p>}
-            </div>
-          </div>
-        );
-      })}
-
-      <h2>📅 Week by week</h2>
-      <div className="weeknav">
-        {weeks.map(w => (
-          <button key={w.key} className={(w.key === curKey ? "on" : "") + (w.key === season?.currentWeek ? " now" : "")} onClick={() => setWkSel(w.key)}>{w.label}</button>
-        ))}
-      </div>
-      {week && (
-        <div className="games">
-          {week.games.map(g => (
-            <div key={g.id} className={"game" + (g.final ? " final" : "")}>
-              <div className={"side" + (g.winner === g.away ? " won" : "")}>
-                <img src={logo(g.away)} alt="" /><span className="abbr">{moji(g.away)} {g.away}</span>
-                <span className="owners"><OwnerTags own={g.awayOwners} config={config} /></span>
-                {g.final && <b className="score">{g.awayScore}</b>}
-              </div>
-              <div className="mid">{g.final ? "F" : g.state === "in" ? "LIVE" : g.timeValid === false ? `${new Date(g.date).toLocaleDateString([], { weekday: "short", month: "numeric", day: "numeric" })} · TBD` : kickoff(g.date)}</div>
-              <div className={"side home" + (g.winner === g.home ? " won" : "")}>
-                {g.final && <b className="score">{g.homeScore}</b>}
-                <span className="owners"><OwnerTags own={g.homeOwners} config={config} /></span>
-                <span className="abbr">{g.home} {moji(g.home)}</span><img src={logo(g.home)} alt="" />
-              </div>
-              {(g.credits || []).map(c => (
-                <div key={c.team} className="credit">{moji(c.team)} {c.team} +{fmt$((c.credit / 100) * pot)} → <OwnerTags own={c.owners} config={config} /></div>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 
 function TradeFinder({ view, onDraft }) {
   const { tradeFinder: tf, state, teams, oddsMeta } = view;

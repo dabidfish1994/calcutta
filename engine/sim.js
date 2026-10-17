@@ -12,7 +12,7 @@ import { shareFromRates } from "./payouts.js";
 // WC weight rides on reachDiv (WC winners + bye teams) rather than on WC games alone.
 const PDF_PROFILE = { regWin: PAYOUT.regWin, berth: PAYOUT.playoffBerth, oneSeed: 0, wcWin: 0, reachDiv: PAYOUT.wcWin, divWin: PAYOUT.divWin, confWin: PAYOUT.confWin, sbWin: PAYOUT.sbWin, divTitle: 0 };
 
-const HFA = 40; // home-field advantage in Elo points (~55.7% for even teams)
+export const HFA = 40; // home-field advantage in Elo points (~55.7% for even teams)
 const ELO_K = 25;
 
 // Bump when the valuation schema/logic changes so cached valuation.json files recompute on deploy.
