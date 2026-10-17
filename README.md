@@ -20,6 +20,25 @@ On boot the server automatically: fetches the current schedule/results → refit
 recomputes valuations. It re-syncs every 6 hours all season. Set `DATA_DIR` to put runtime
 state on a persistent volume (Railway/Fly); it seeds itself from the repo's `data/` folder.
 
+## The league site (what everyone sees)
+
+The public URL is the whole league's week-to-week viewer. Each visitor picks their group
+once (saved per device); their group is highlighted and "Only my games" filters the week.
+
+- **Season** — standings table, every group's roster (bought for / banked / projected),
+  and week by week: an automatic recap (top earner, sweeps, 0-fers, head-to-heads) plus
+  scoreboard cards with each team's owner, scores or win odds, and the $ at stake.
+- **Odds** — every team's sportsbook lines next to the model's numbers.
+- **Rules** — every payout in dollars at the real pot, the playoff-run ladder, a "what would
+  a team make" calculator, and a plain-English rules summary.
+
+## Editing (passcode)
+
+Editing (draft fixes, trades, setup) and our private tools (trade finder, transcripts) need
+the commissioner code: tap 🔒 in the header to show the Trades, Board, Draft and Setup tabs. Only a salted scrypt hash of the code is in
+this repo (`ADMIN_HASH` in `server/index.js`). To change the code without a deploy, set an
+`ADMIN_KEY` environment variable on Railway; it is accepted in addition to the hashed one.
+
 ## Draft night — the dynamic flow
 
 There is **no draft order to configure**. Hit **🏈 Start draft**, tap **🎙 Listen to the

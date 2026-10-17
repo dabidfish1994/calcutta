@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, membersOf } from "./avatars.jsx";
 
 import { fmt$, fmtPct, logo, moji, act, shortName, memberNames, groupName, getAdminKey, setAdminKey, useMe, useRoute } from "./util.jsx";
-import { Week, Standings, Teams, Rules, TeamSheet, GroupSheet, WhoAreYou, PlayoffPicture } from "./viewer.jsx";
+import { Season, Rules, WhoAreYou } from "./viewer.jsx";
 
 function useLive(onTranscript) {
   const [view, setView] = useState(null);
@@ -30,13 +30,17 @@ function useLive(onTranscript) {
 }
 
 const VIEW_TABS = [
-  { id: "week", label: "Week", icon: "📅" },
-  { id: "standings", label: "Standings", icon: "🏆" },
-  { id: "teams", label: "Teams", icon: "🏈" },
+  { id: "season", label: "Season", icon: "🏈" },
   { id: "odds", label: "Odds", icon: "🎲" },
   { id: "rules", label: "Rules", icon: "📜" }
 ];
-const ADMIN_TAB = { id: "admin", label: "War room", icon: "🔒" };
+// Editing tabs, shown only after unlocking with the commissioner code.
+const ADMIN_TABS = [
+  { id: "trades", label: "Trades", icon: "🤝" },
+  { id: "board", label: "Board", icon: "📋" },
+  { id: "draft", label: "Draft", icon: "🔨" },
+  { id: "setup", label: "Setup", icon: "⚙️" }
+];
 
 export default function App() {
   const [lines, setLines] = useState([]);
@@ -53,32 +57,32 @@ export default function App() {
   const admin = !!view.admin;
   const seasonOn = !!view.seasonStarted || view.state.auction.phase === "done";
   if (seasonOn) { try { localStorage.setItem("cc-listen", "0"); } catch {} }
-  const tabs = admin ? [...VIEW_TABS, ADMIN_TAB] : VIEW_TABS;
-  const tab = tabs.some(t => t.id === route.tab) ? route.tab : (!seasonOn && admin ? "admin" : "week");
+  const tabs = admin ? [...VIEW_TABS, ...ADMIN_TABS] : VIEW_TABS;
+  const tab = tabs.some(t => t.id === route.tab) ? route.tab : (!seasonOn && admin ? "draft" : "season");
   const askWho = seasonOn && (me === undefined || picking);
   const meName = me ? view.state.config.groups.find(g => g.id === me)?.name : null;
   let body;
-  if (!seasonOn && tab !== "admin") body = <div className="pad"><h1 className="pagetitle">Draft hasn't happened yet</h1><p className="dim">Standings and weekly results show up here once the auction is done.</p></div>;
-  else if (tab === "week") body = <Week view={view} me={me} route={route} go={go} />;
-  else if (tab === "standings") body = <Standings view={view} me={me} go={go} />;
-  else if (tab === "teams") body = <Teams view={view} me={me} go={go} />;
-  else if (tab === "odds") body = <Odds view={view} me={me} go={go} />;
-  else if (tab === "rules") body = <Rules view={view} me={me} go={go} />;
-  else body = <AdminHub view={view} lines={lines} route={route} go={go} />;
+  if (tab === "season") body = <Season view={view} me={me} />;
+  else if (tab === "odds") body = <Odds view={view} />;
+  else if (tab === "rules") body = <Rules view={view} me={me} />;
+  else if (tab === "trades") body = <Trades view={view} />;
+  else if (tab === "board") body = <Board view={view} />;
+  else if (tab === "draft") body = <Draft view={view} lines={lines} />;
+  else body = <Setup view={view} />;
   return (
     <div className="app">
       <header className="topbar">
-        <a className="brand" href="#/week">🏈 <span>Cardinal Calcutta</span></a>
+        <a className="brand" href="#/season">🏈 <span>Cardinal Calcutta</span></a>
         <div className="topright">
           {seasonOn ? <span className="potbadge">pot <b>{fmt$(view.potForSettlement)}</b></span> : <PotBadge view={view} />}
           {seasonOn && (
             <button className="mebtn" onClick={() => setPicking(true)} aria-label={meName ? `Viewing as ${memberNames(meName)} — change` : "Pick your group"}>
-              {meName ? <span className="crew">{membersOf(meName).map(n => <Avatar key={n} name={n} title={n} size={22} mode="hero" />)}</span> : <span>Pick your group</span>}
+              {meName ? <><span className="crew">{membersOf(meName).map(n => <Avatar key={n} name={n} title={n} size={22} mode="hero" />)}</span><span className="mename">{memberNames(meName)}</span></> : <span>Pick your group</span>}
               <span aria-hidden="true">▾</span>
             </button>
           )}
           <button className={"lockbtn" + (admin ? " on" : "")} title={admin ? "War room unlocked — tap to lock this device" : "Commissioner unlock"}
-            onClick={() => { if (admin) { setAdminKey(""); reconnect(); if (route.tab === "admin") go({ tab: "week", arg: null }); } else setUnlocking(true); }}>
+            onClick={() => { if (admin) { setAdminKey(""); reconnect(); if (ADMIN_TABS.some(t => t.id === route.tab)) go({ tab: "season", arg: null }); } else setUnlocking(true); }}>
             {admin ? "🔓" : "🔒"}
           </button>
         </div>
@@ -91,8 +95,6 @@ export default function App() {
           </button>
         ))}
       </nav>
-      {route.team && seasonOn && <TeamSheet view={view} team={route.team} me={me} go={go} />}
-      {route.group && seasonOn && <GroupSheet view={view} gid={route.group} me={me} go={go} />}
       {askWho && <WhoAreYou view={view} me={me} onPick={g => { setMe(g); setPicking(false); }} onClose={() => { if (me === undefined) setMe("none"); setPicking(false); }} />}
       {unlocking && <Unlock onDone={ok => { setUnlocking(false); if (ok) reconnect(); }} />}
     </div>
@@ -118,19 +120,6 @@ function Unlock({ onDone }) {
         {err && <p className="red small">{err}</p>}
         <div className="row gap"><button className="go" disabled={busy || !key}>{busy ? "Checking…" : "Unlock"}</button><button type="button" onClick={() => onDone(false)}>Cancel</button></div>
       </form>
-    </div>
-  );
-}
-
-function AdminHub({ view, lines, route, go }) {
-  const SUBS = [["trades", "Trades"], ["board", "Draft board"], ["draft", "Draft console"], ["setup", "Setup"]];
-  const sub = SUBS.some(([k]) => k === route.arg) ? route.arg : "trades";
-  return (
-    <div>
-      <div className="pad" style={{ paddingBottom: 0 }}>
-        <div className="segrow">{SUBS.map(([k, l]) => <button key={k} className={"seg" + (sub === k ? " on" : "")} onClick={() => go({ arg: k })}>{l}</button>)}</div>
-      </div>
-      {sub === "trades" ? <Trades view={view} /> : sub === "board" ? <Board view={view} /> : sub === "draft" ? <Draft view={view} lines={lines} /> : <Setup view={view} />}
     </div>
   );
 }
@@ -913,7 +902,7 @@ const american = o => (o == null ? "—" : o > 0 ? `+${o}` : `${o}`);
 const pct = p => `${Math.round(p * 100)}%`;
 const pct1 = p => `${(p * 100).toFixed(1)}%`;
 
-function Odds({ view, me, go }) {
+function Odds({ view }) {
   const { teams, valuation, repricing } = view;
   const inSeason = !!view.seasonStarted || view.state.auction.phase === "done";
   const money = t => inSeason ? ((valuation.teams[t]?.share || 0) / 100) * view.potForSettlement : (repricing.fair[t] || 0);
@@ -932,12 +921,6 @@ function Odds({ view, me, go }) {
   const ROUNDS = [["wc", "Wild Card"], ["div", "Divisional"], ["conf", "Conference Championships"], ["sb", "Super Bowl"]];
   return (
     <div className="pad">
-      {inSeason && view.nflStandings && (<>
-        <h1 className="pagetitle">Playoff picture</h1>
-        <p className="dim small">Seeds if the season ended today (ESPN standings), with each team's owner and the simulation's playoff odds.</p>
-        <PlayoffPicture view={view} me={me} go={go} />
-        <h2>🎲 Odds for every team</h2>
-      </>)}
       <p className="dim">
         Sportsbook futures (de-vigged) blended into the season simulation at <b>{wPct}% market weight</b>. The weight shrinks as
         real games are played, so by December the numbers run almost entirely on actual results. ⚡ = sportsbooks and the model disagree.
@@ -950,7 +933,7 @@ function Odds({ view, me, go }) {
         <tbody>
           {rows.map(({ t, v }) => (
             <tr key={t}>
-              <td className={inSeason ? "click" : ""} onClick={inSeason ? () => go({ team: t, group: null }) : undefined}><img className="tinylogo" src={logo(t)} alt="" /> {moji(t)} {teams[t].name} {disagree(v) && <em className="amber" title={`market P(playoffs) ${pct(v.market.pPlayoff)} vs model ${pct(v.sim.pPlayoff)}; market P(SB) ${pct1(v.market.pSb)} vs model ${pct1(v.sim.pSb)}`}>⚡</em>}</td>
+              <td><img className="tinylogo" src={logo(t)} alt="" /> {moji(t)} {teams[t].name} {disagree(v) && <em className="amber" title={`market P(playoffs) ${pct(v.market.pPlayoff)} vs model ${pct(v.sim.pPlayoff)}; market P(SB) ${pct1(v.market.pSb)} vs model ${pct1(v.sim.pSb)}`}>⚡</em>}</td>
               <td className="r">{v.market.winTotal ?? "—"}</td>
               <td className="r">{v.expWins.toFixed(1)}</td>
               <td className="r">{pct(v.pPlayoffs)}<div className="subodds">{american(v.market.playoffOdds)} · sim {pct(v.sim.pPlayoff)}</div></td>
