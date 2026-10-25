@@ -457,6 +457,7 @@ const GROUP_MEMES = {
   g2: { bills: true, tag: "💸" }, // Dylan's group gets the fat-finger meme
   g3: { id: "war", tag: "🎖️", label: "Secretary of War", alt: "Breaking news: new Secretary of War named", fit: "full" }, // the picture is its own caption
   g4: { id: "fuller", tag: "🤵", label: "Fuller", alt: "Fuller in a tuxedo, checking the standings", top: `6'7"`, bottom: "Can't dunk" },
+  g5: { id: "wyeth", tag: "🏊", label: "Wyeth", alt: "Meme: a 7am carve-out request, and Wyeth smiling in the water", fit: "full" }, // the picture is its own caption
   g6: { id: "mike", tag: "🍼", label: "Mike", alt: "Mike in a hanbok and gat in Seoul", bottom: "Our wittle brother" }
 };
 function GroupMeme({ view, d, gid, onClose, onTeams }) {
