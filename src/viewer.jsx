@@ -7,6 +7,8 @@ import {
 } from "./util.jsx";
 
 const ordinal = n => n + (["th", "st", "nd", "rd"][(n % 100 >> 3) ^ 1 && n % 10] || "th");
+// Makes a non-button element tappable (mouse, touch, keyboard).
+const tapProps = fn => ({ role: "button", tabIndex: 0, onClick: fn, onKeyDown: e => e.key === "Enter" && fn() });
 const fmtWL = r => `${+r.w.toFixed(1)}–${+r.l.toFixed(1)}`;
 const TYPE_LABEL = {
   regWin: "Regular-season wins", berth: "Made the playoffs", reachDiv: "Wild Card win / bye", wcWin: "Wild Card win",
@@ -167,7 +169,7 @@ function GameCard({ d, g, me, onTeam }) {
         const won = g.final && g.winner === r.team, lost = g.final && g.winner && g.winner !== r.team;
         return (
           <div key={r.team} className={"grow" + (won ? " won" : "") + (lost ? " lost" : "") + (onTeam ? " clickable" : "")}
-            {...(onTeam ? { role: "button", tabIndex: 0, onClick: () => onTeam(r.team), onKeyDown: e => e.key === "Enter" && onTeam(r.team) } : {})}>
+            {...(onTeam ? tapProps(() => onTeam(r.team)) : {})}>
             <span className="gteam">
               <img src={logo(r.team)} alt="" /><b>{r.team}</b><span className="dim">{rec(r.team)}</span>
             </span>
@@ -198,10 +200,11 @@ export function Season({ view, me }) {
   const [syncing, setSyncing] = useState(false);
   const [wkSel, setWkSel] = useState(null);
   const [onlyMine, setOnlyMine] = useState(false);
-  const [meme, setMeme] = useState(null);
+  const [meme, setMeme] = useState(null); // "loss" (Bills) or a GROUP_MEMES group id
   const [teamPop, setTeamPop] = useState(null);
-  const openTeam = t => (t === "BUF" ? setMeme("tap") : setTeamPop(t));
+  const openTeam = setTeamPop;
   const jumpTo = gid => document.getElementById(gid === me ? "roster-me" : `roster-${gid}`)?.scrollIntoView({ block: "start" });
+  const openGroup = gid => (GROUP_MEMES[gid] ? setMeme(gid) : jumpTo(gid));
   const lastBillsLoss = useMemo(() => d.weeks.flatMap(w => w.games)
     .filter(g => (g.home === "BUF" || g.away === "BUF") && g.final && g.winner && g.winner !== "BUF")
     .sort((a, b) => b.date.localeCompare(a.date))[0] || null, [d]);
@@ -230,9 +233,8 @@ export function Season({ view, me }) {
     const projected = banked + ((pt.futureShare || 0) / 100) * pot * stake;
     const paid = d.paidFor(t, gid);
     const bills = t === "BUF";
-    const tap = { role: "button", tabIndex: 0, onClick: () => openTeam(t), onKeyDown: e => e.key === "Enter" && openTeam(t) };
     return (
-      <div key={t} className={"spot clickable" + (gid === me ? "" : " rival")} {...tap}>
+      <div key={t} className={"spot clickable" + (gid === me ? "" : " rival")} {...tapProps(() => openTeam(t))}>
         <div className="spothead"><img src={logo(t)} alt="" /><div><b>{moji(t)} {teams[t].name}{bills ? " 💸" : ""}</b><div className="dim">{recStr(d.record(t))}{stake < 1 ? ` · ${fmtPct(stake * 100)} stake` : ""} · net cost {fmt$(paid)}</div></div></div>
         <div className="spotnums">
           <div><label>banked</label><b>{fmt$(banked)}</b></div>
@@ -265,8 +267,8 @@ export function Season({ view, me }) {
           {groups.map(g => {
             const s = summaries[g.id]; const pj = proj[g.id] || {};
             return (
-              <tr key={g.id} className={(g.id === me ? "hl" : "") + " clickable"} onClick={() => (g.id === FULLER_GROUP ? setMeme("fuller") : jumpTo(g.id))}>
-                <td>{memberNames(g.name)}{g.id === FULLER_GROUP ? " 🤵" : ""}</td>
+              <tr key={g.id} className={(g.id === me ? "hl" : "") + " clickable"} onClick={() => openGroup(g.id)}>
+                <td>{memberNames(g.name)}{GROUP_MEMES[g.id] ? ` ${GROUP_MEMES[g.id].tag}` : ""}</td>
                 <td className="r">{d.teamsOf(g.id).length}</td>
                 <td className="r">{fmt$(s.earnedDollars)}</td>
                 <td className="r">{fmt$(pj.projectedEarned || 0)}</td>
@@ -297,8 +299,8 @@ export function Season({ view, me }) {
               <span className="rosteravatars">
                 {membersOf(g.name).map(n => <Avatar key={n} name={n} title={n} size={22} mode={me ? "weak" : "hero"} />)}
               </span>
-              {g.id === FULLER_GROUP
-                ? <button className="linkish" onClick={() => setMeme("fuller")}><b>{memberNames(g.name)} 🤵</b></button>
+              {GROUP_MEMES[g.id]
+                ? <button className="linkish" onClick={() => setMeme(g.id)}><b>{memberNames(g.name)} {GROUP_MEMES[g.id].tag}</b></button>
                 : <b>{memberNames(g.name)}</b>}
               <span className="dim">{held.length} team{held.length === 1 ? "" : "s"} · spent {fmt$(s.spent - s.tradeCash)} · banked {fmt$(s.earnedDollars)} · proj. net{" "}
                 <b className={(pj.projectedNet || 0) >= 0 ? "green" : "red"}>{(pj.projectedNet || 0) >= 0 ? "+" : ""}{fmt$(pj.projectedNet || 0)}</b>
@@ -336,15 +338,15 @@ export function Season({ view, me }) {
         </div>
       ))}
       {week && !games.length && <p className="dim">None of your teams play this week.</p>}
-      {teamPop && <TeamPopup view={view} team={teamPop} me={me} onClose={() => setTeamPop(null)} />}
-      {meme === "fuller" ? <FullerMeme view={view} d={d} onClose={() => setMeme(null)} />
-        : meme && <FatFinger view={view} d={d} reason={meme} onClose={() => setMeme(null)} />}
+      {teamPop && <TeamTap view={view} team={teamPop} me={me} onClose={() => setTeamPop(null)} />}
+      {meme === "loss" && <FatFinger view={view} d={d} reason="loss" onClose={() => setMeme(null)} />}
+      {GROUP_MEMES[meme] && <GroupMeme view={view} d={d} gid={meme} onClose={() => setMeme(null)} onTeams={() => { setMeme(null); jumpTo(meme); }} />}
     </div>
   );
 }
 
 // ---------------- meme popups ----------------
-function MemePopup({ label, img, alt, top, bottom, quote, cite, stats, foot, onClose }) {
+function MemePopup({ label, img, alt, top, bottom, quote, cite, stats, foot, action, onClose }) {
   useEffect(() => {
     const f = e => e.key === "Escape" && onClose();
     addEventListener("keydown", f);
@@ -361,6 +363,7 @@ function MemePopup({ label, img, alt, top, bottom, quote, cite, stats, foot, onC
         {quote && <blockquote className="memequote">“{quote}”<cite>{cite}</cite></blockquote>}
         <div className="memestats">{stats.map(([l, v, tone]) => <div key={l}><label>{l}</label><b className={tone || ""}>{v}</b></div>)}</div>
         {foot && <p className="small">{foot}</p>}
+        {action && <button onClick={action.onClick}>{action.label}</button>}
         <button className="go" onClick={onClose}>😂 Close</button>
       </div>
     </div>
@@ -400,27 +403,29 @@ function FatFinger({ view, d, reason, onClose }) {
   );
 }
 
-// Fuller.
-const FULLER_GROUP = "g4";
-function FullerMeme({ view, d, onClose }) {
-  const g = d.groups.find(x => x.id === FULLER_GROUP);
-  if (!g) return null;
-  const s = d.stats(FULLER_GROUP);
-  const ord = n => n + (["th", "st", "nd", "rd"][(n % 100 >> 3) ^ 1 && n % 10] || "th");
+// Group memes: tap the group in the standings or on its roster header. Photos live on the
+// server volume (POST /api/admin/meme/<id>), never in the repo.
+const GROUP_MEMES = {
+  g4: { id: "fuller", tag: "🤵", label: "Fuller", alt: "Fuller in a tuxedo, checking the standings", top: `6'7"`, bottom: "Can't dunk" },
+  g6: { id: "mike", tag: "🍼", label: "Mike", alt: "Mike in a hanbok and gat in Seoul", bottom: "Our wittle brother" }
+};
+function GroupMeme({ view, d, gid, onClose, onTeams }) {
+  const m = GROUP_MEMES[gid];
+  if (!m || !d.groups.some(x => x.id === gid)) return null;
+  const s = d.stats(gid);
   return (
-    <MemePopup label="Fuller" onClose={onClose}
-      img={view.meme?.fuller ? `/api/meme/fuller?v=${view.meme.fuller}` : null}
-      alt="Fuller in a tuxedo, checking the standings"
-      top={`6'7"`}
-      bottom="Can't dunk"
-      stats={[["Money banked", fmt$(s.banked)], ["League rank", ord(s.rank)], ["Spent at auction", fmt$(s.netCost)],
+    <MemePopup label={m.label} onClose={onClose}
+      img={view.meme?.[m.id] ? `/api/meme/${m.id}?v=${view.meme[m.id]}` : null}
+      alt={m.alt} top={m.top} bottom={m.bottom}
+      stats={[["Money banked", fmt$(s.banked)], ["League rank", ordinal(s.rank)], ["Spent at auction", fmt$(s.netCost)],
         ["Projected net", fmtSigned$(s.projNet), s.projNet >= 0 ? "green" : "red"]]}
-      foot={`${d.name(FULLER_GROUP)}: ${s.teams.length} teams, ${+s.record.w.toFixed(1)}–${+s.record.l.toFixed(1)} combined.`} />
+      foot={`${d.name(gid)}: ${s.teams.length} teams, ${+s.record.w.toFixed(1)}–${+s.record.l.toFixed(1)} combined.`}
+      action={{ label: `See ${d.name(gid)}'s teams`, onClick: onTeams }} />
   );
 }
 
 // ---------------- team popup ----------------
-export function TeamPopup({ view, team: t, me, onClose }) {
+export function TeamPopup({ view, team: t, me, onClose, onTeam, back }) {
   const d = useDerived(view);
   useEffect(() => {
     const f = e => e.key === "Escape" && onClose();
@@ -438,6 +443,7 @@ export function TeamPopup({ view, team: t, me, onClose }) {
   return (
     <div className="sheetback" onClick={onClose}>
       <div className="sheet team-sheet" role="dialog" aria-modal="true" aria-label={info.name} onClick={e => e.stopPropagation()}>
+        {back && <button className="tiny tpback" onClick={back.go}>← {view.teams[back.team]?.name || back.team}</button>}
         <div className="tphead">
           <img src={logo(t)} alt="" />
           <div>
@@ -461,7 +467,7 @@ export function TeamPopup({ view, team: t, me, onClose }) {
             const p = g.pHome == null ? null : home ? g.pHome : 1 - g.pHome;
             const earned = (g.credits || []).filter(c => c.team === t).reduce((sum, c) => sum + c.credit, 0);
             return (
-              <div key={g.id} className={"tsrow" + (won ? " won" : "") + (lost ? " lost" : "")}>
+              <div key={g.id} className={"tsrow" + (won ? " won" : "") + (lost ? " lost" : "") + (onTeam ? " clickable" : "")} {...(onTeam ? tapProps(() => onTeam(opp)) : {})}>
                 <span className="dim small">{g.seasontype === 2 ? `Wk ${g.week}` : g.weekLabel}</span>
                 <span className="tsopp">{home ? "vs" : "@"} <img src={logo(opp)} alt="" /> {opp}</span>
                 <span className="tsres">
@@ -480,10 +486,21 @@ export function TeamPopup({ view, team: t, me, onClose }) {
   );
 }
 
-// The Bills open the fat-finger meme; every other team opens its popup.
+// The Bills open the fat-finger meme; every other team opens its popup. Tapping an opponent
+// in the schedule opens that team, with a back button to the one before.
 export function TeamTap({ view, team, me, onClose }) {
   const d = useDerived(view);
-  return team === "BUF" ? <FatFinger view={view} d={d} reason="tap" onClose={onClose} /> : <TeamPopup view={view} team={team} me={me} onClose={onClose} />;
+  const [stack, setStack] = useState([team]);
+  const t = stack[stack.length - 1], prev = stack[stack.length - 2];
+  const goBack = () => setStack(s => s.slice(0, -1));
+  if (t === "BUF") return <FatFinger view={view} d={d} reason="tap" onClose={prev ? goBack : onClose} />;
+  return <TeamPopup key={t} view={view} team={t} me={me} onClose={onClose} onTeam={o => setStack(s => [...s, o])} back={prev && { team: prev, go: goBack }} />;
+}
+
+// For screens with team names in a table: const [tapTeam, teamPopup] = useTeamTap(view, me).
+export function useTeamTap(view, me) {
+  const [team, setTeam] = useState(null);
+  return [setTeam, team && <TeamTap key={team} view={view} team={team} me={me} onClose={() => setTeam(null)} />];
 }
 
 // ---------------- RULES & PAYOUTS ----------------

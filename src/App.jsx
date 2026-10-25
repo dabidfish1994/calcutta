@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, membersOf } from "./avatars.jsx";
 
 import { fmt$, fmtPct, logo, moji, act, shortName, memberNames, groupName, getAdminKey, setAdminKey, useMe, useRoute } from "./util.jsx";
-import { Season, Rules, WhoAreYou, TeamTap } from "./viewer.jsx";
+import { Season, Rules, WhoAreYou, TeamTap, useTeamTap } from "./viewer.jsx";
 
 function useLive(onTranscript) {
   const [view, setView] = useState(null);
@@ -831,6 +831,7 @@ function Board({ view }) {
   const [editing, setEditing] = useState(null);
   const [editAmt, setEditAmt] = useState("");
   const [editGroup, setEditGroup] = useState("");
+  const [tapTeam, teamPopup] = useTeamTap(view, null);
   const rows = Object.keys(teams)
     .map(t => ({ t, share: valuation?.teams?.[t]?.share ?? 0, fair: repricing.fair[t] || 0, sale: sales[t] }))
     .sort((a, b) => b.share - a.share);
@@ -857,7 +858,7 @@ function Board({ view }) {
             return (
               <React.Fragment key={r.t}>
                 <tr className={isOnBlock ? "hl" : ""}>
-                  <td><img className="tinylogo" src={logo(r.t)} alt="" /> {moji(r.t)} {teams[r.t].name}</td>
+                  <td className="clickable" onClick={() => tapTeam(r.t)}><img className="tinylogo" src={logo(r.t)} alt="" /> {moji(r.t)} {teams[r.t].name}</td>
                   <td className="r">{r.share.toFixed(2)}%</td>
                   <td className="r">{fmt$(r.fair)}</td>
                   <td>
@@ -899,6 +900,7 @@ function Board({ view }) {
           })}
         </tbody>
       </table>
+      {teamPopup}
     </div>
   );
 }
@@ -962,9 +964,9 @@ function Odds({ view, me }) {
           <div className="strip">
             {(valuation.matchups?.[key] || []).map((m, i) => (
               <div key={i} className="matchchip">
-                <img src={logo(m.away)} alt="" />
+                <MatchLogo t={m.away} teams={teams} onTap={inSeason ? setPop : null} />
                 <span>{key === "sb" ? "vs" : "@"}</span>
-                <img src={logo(m.home)} alt="" />
+                <MatchLogo t={m.home} teams={teams} onTap={inSeason ? setPop : null} />
                 <em>{Math.round(m.p * 100)}%</em>
               </div>
             ))}
@@ -981,8 +983,13 @@ function Odds({ view, me }) {
   );
 }
 
+const MatchLogo = ({ t, teams, onTap }) => onTap
+  ? <button className="logobtn" aria-label={teams[t]?.name || t} onClick={() => onTap(t)}><img src={logo(t)} alt="" /></button>
+  : <img src={logo(t)} alt="" />;
+
 function TradeFinder({ view, onDraft }) {
   const { tradeFinder: tf, state, teams, oddsMeta } = view;
+  const [tapTeam, teamPopup] = useTeamTap(view, state.config.ourGroupId);
   if (!tf) return null;
   const config = state.config; const ours = config.ourGroupId;
   const ownerLabel = own => Object.entries(own).filter(([, p]) => p > 0).map(([g, p]) => `${shortName(groupName(config, g))}${p < 100 ? ` ${fmtPct(p)}` : ""}`).join(", ");
@@ -999,7 +1006,7 @@ function TradeFinder({ view, onDraft }) {
           <thead><tr><th>Team</th><th>Seller</th><th className="r">Model value</th><th className="r">Market value</th><th className="r">Edge</th><th className="r">Offer up to</th><th className="r">Walk away</th><th></th></tr></thead>
           <tbody>{tf.buy.map(r => (
             <tr key={r.team + r.owner}>
-              <td>{moji(r.team)} {teams[r.team].name}</td><td>{shortName(groupName(config, r.owner))}{r.stake < 100 ? ` (${fmtPct(r.stake)} stake)` : ""}</td>
+              <td className="clickable" onClick={() => tapTeam(r.team)}>{moji(r.team)} {teams[r.team].name}</td><td>{shortName(groupName(config, r.owner))}{r.stake < 100 ? ` (${fmtPct(r.stake)} stake)` : ""}</td>
               <td className="r">{fmt$(r.modelFuture)}</td><td className="r">{fmt$(r.marketFuture)}</td>
               <td className="r green">+{fmt$(r.edge)}</td><td className="r"><b>{fmt$(r.offerUpTo)}</b></td><td className="r">{fmt$(r.walkAway)}</td>
               <td><button className="tiny" onClick={() => onDraft({ team: r.team, from: r.owner, to: ours, pct: r.stake, cash: Math.round(r.offerUpTo / 25) * 25 })}>draft offer</button></td>
@@ -1012,7 +1019,7 @@ function TradeFinder({ view, onDraft }) {
           <thead><tr><th>Team</th><th className="r">Our stake</th><th className="r">Model value</th><th className="r">Market value</th><th className="r">Ask at least</th><th className="r">Floor</th></tr></thead>
           <tbody>{tf.sell.map(r => (
             <tr key={r.team}>
-              <td>{moji(r.team)} {teams[r.team].name}</td><td className="r">{fmtPct(r.ourStake)}</td>
+              <td className="clickable" onClick={() => tapTeam(r.team)}>{moji(r.team)} {teams[r.team].name}</td><td className="r">{fmtPct(r.ourStake)}</td>
               <td className="r">{fmt$(r.modelFuture)}</td><td className="r">{fmt$(r.marketFuture)}</td>
               <td className="r"><b>{fmt$(r.askAtLeast)}</b></td><td className="r">{fmt$(r.floor)}</td>
             </tr>))}</tbody>
@@ -1023,12 +1030,13 @@ function TradeFinder({ view, onDraft }) {
           <thead><tr><th>Team</th><th>Owner</th><th className="r">Banked</th><th className="r">Model</th><th className="r">Market</th><th className="r">Edge</th></tr></thead>
           <tbody>{tf.all.map(r => (
             <tr key={r.team} className={r.ourStake > 0 ? "hl" : ""}>
-              <td>{moji(r.team)} {r.team}{r.eliminated ? " ✖" : ""}</td><td>{ownerLabel(r.owners)}</td>
+              <td className="clickable" onClick={() => tapTeam(r.team)}>{moji(r.team)} {r.team}{r.eliminated ? " ✖" : ""}</td><td>{ownerLabel(r.owners)}</td>
               <td className="r">{fmt$(r.banked$)}</td><td className="r">{fmt$(r.modelFuture)}</td><td className="r">{fmt$(r.marketFuture)}</td>
               <td className={"r " + (r.edge >= 0 ? "green" : "red")}>{r.edge >= 0 ? "+" : ""}{fmt$(r.edge)}</td>
             </tr>))}</tbody>
         </table></div>
       </details>
+      {teamPopup}
     </div>
   );
 }

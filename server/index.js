@@ -124,7 +124,7 @@ let valuation = fs.existsSync(DATA("valuation.json"))
 
 let profiles = loadProfiles(DATA_DIR);
 // Meme photos live on the Railway volume, never in the public repo.
-const MEME_IDS = ["buf", "fuller"];
+const MEME_IDS = ["buf", "fuller", "mike"];
 const memeFile = id => DATA(`meme-${id}.img`), memeMetaFile = id => DATA(`meme-${id}.json`);
 const memes = Object.fromEntries(MEME_IDS.map(id => { try { return [id, JSON.parse(fs.readFileSync(memeMetaFile(id), "utf8"))]; } catch { return [id, null]; } }));
 let nflStandings = (() => { try { return JSON.parse(fs.readFileSync(DATA("standings-2026.json"), "utf8")); } catch { return null; } })();
