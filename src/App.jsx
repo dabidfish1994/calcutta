@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, membersOf } from "./avatars.jsx";
 
 import { fmt$, fmtPct, logo, moji, act, shortName, memberNames, groupName, getAdminKey, setAdminKey, useMe, useRoute } from "./util.jsx";
-import { Season, Rules, WhoAreYou, TeamTap, useTeamTap } from "./viewer.jsx";
+import { Season, Rules, WhoAreYou, TeamTap, useTeamTap, Sheet } from "./viewer.jsx";
 
 function useLive(onTranscript) {
   const [view, setView] = useState(null);
@@ -118,15 +118,13 @@ function Unlock({ onDone }) {
     if (r?.admin && r.token) { setAdminKey(r.token); onDone(true); } else setErr(r?.error || "That code didn't work.");
   };
   return (
-    <div className="sheetback" onClick={() => onDone(false)}>
-      <form className="sheet who" role="dialog" aria-modal="true" aria-label="Commissioner unlock" onClick={e => e.stopPropagation()} onSubmit={submit}>
+    <Sheet kind="who" as="form" label="Commissioner unlock" onClose={() => onDone(false)} onSubmit={submit}>
         <h2>🔒 War room</h2>
         <p className="dim small">Editing (draft fixes, trades, setup) and our private tools need the code. Everything else is open to the league.</p>
         <input type="password" autoFocus autoComplete="current-password" value={key} onChange={e => setKey(e.target.value)} placeholder="code" aria-label="Code" />
         {err && <p className="red small">{err}</p>}
         <div className="row gap"><button className="go" disabled={busy || !key}>{busy ? "Checking…" : "Unlock"}</button><button type="button" onClick={() => onDone(false)}>Cancel</button></div>
-      </form>
-    </div>
+    </Sheet>
   );
 }
 

@@ -331,6 +331,15 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .sheet { background: var(--bg); border: 1px solid var(--line); border-bottom: none; border-radius: 16px 16px 0 0; width: 100%; max-height: 92vh; max-height: 92dvh; overflow-y: auto; overscroll-behavior: contain; padding: 1rem 1rem calc(1.6rem + env(safe-area-inset-bottom)); }
 @media (min-width: 760px) { .sheetback { align-items: center; } .sheet { border-radius: 16px; border-bottom: 1px solid var(--line); max-height: 88vh; } }
 .sheet.who { max-width: 34rem; display: flex; flex-direction: column; gap: .5rem; }
+/* the ✕ sits on the sheet's corner, outside the scrolling part, so it's always one tap away */
+.sheetwrap { position: relative; width: 100%; }
+.sw-who { max-width: 34rem; } .sw-team-sheet { max-width: 30rem; } .sw-meme-sheet { max-width: 26rem; }
+.sheetx {
+  position: absolute; top: .5rem; right: .5rem; z-index: 2; width: 2.5rem; height: 2.5rem; padding: 0;
+  border-radius: 50%; display: grid; place-items: center; font-size: 1.05rem; line-height: 1;
+  background: var(--panel2); border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(0, 0, 0, .45);
+}
+.sheet.who > h2:first-child, .tphead { padding-right: 2.8rem; }
 .sheet.who input { width: 100%; }
 .whogrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: .45rem; margin: .3rem 0 .4rem; }
 .whobtn { display: flex; flex-direction: column; align-items: center; gap: .35rem; padding: .7rem .5rem; border-radius: 12px; border: 1px solid var(--line); border-top: 4px solid var(--mine); font-size: .85rem; }
@@ -357,7 +366,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 
 /* the Bills fat finger */
 .clickable { cursor: pointer; }
-.sheet.meme-sheet { max-width: 26rem; display: flex; flex-direction: column; gap: .6rem; padding-top: 1rem; }
+.sheet.meme-sheet { max-width: 26rem; display: flex; flex-direction: column; gap: .6rem; padding-top: 3.2rem; } /* room for the ✕ above the picture */
 .sheet.meme-sheet > *, .sheet.team-sheet > * { flex-shrink: 0; } /* scroll the sheet, never squash the picture */
 .meme-sheet .meme { align-self: center; width: 100%; max-width: 100%; } /* width gets narrowed by useFitPicture on small screens */
 /* compact for phones: the 4 stat tiles in one row, the two buttons side by side */

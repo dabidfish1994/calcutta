@@ -393,6 +393,24 @@ export function Season({ view, me }) {
   );
 }
 
+// ---------------- popups ----------------
+// Every popup: tap outside, Escape, or the ✕, which stays in the corner while the content scrolls.
+export function Sheet({ kind, label, onClose, sheetRef, as: Tag = "div", children, ...rest }) {
+  useEffect(() => {
+    const f = e => e.key === "Escape" && onClose();
+    addEventListener("keydown", f);
+    return () => removeEventListener("keydown", f);
+  }, [onClose]);
+  return (
+    <div className="sheetback" onClick={onClose}>
+      <div className={`sheetwrap sw-${kind}`} onClick={e => e.stopPropagation()}>
+        <button type="button" className="sheetx" aria-label="Close" onClick={onClose}>✕</button>
+        <Tag ref={sheetRef} className={`sheet ${kind}`} role="dialog" aria-modal="true" aria-label={label} {...rest}>{children}</Tag>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- meme popups ----------------
 // If the popup doesn't fit on screen (small phones), shrink the picture just enough, keeping its
 // shape, down to 60% of its size; past that the popup scrolls.
@@ -415,16 +433,10 @@ function useFitPicture(sheetRef, dep) {
 }
 
 function MemePopup({ label, img, alt, fit, fallback = "🫰", top, bottom, quote, cite, stats, foot, action, onClose }) {
-  useEffect(() => {
-    const f = e => e.key === "Escape" && onClose();
-    addEventListener("keydown", f);
-    return () => removeEventListener("keydown", f);
-  }, [onClose]);
   const sheet = useRef(null);
   useFitPicture(sheet, img);
   return (
-    <div className="sheetback" onClick={onClose}>
-      <div ref={sheet} className="sheet meme-sheet" role="dialog" aria-modal="true" aria-label={label} onClick={e => e.stopPropagation()}>
+    <Sheet kind="meme-sheet" label={label} onClose={onClose} sheetRef={sheet}>
         <div className={"meme" + (fit ? ` ${fit}` : "")}>
           {img ? <img src={img} alt={alt} /> : <div className="memefallback" aria-hidden="true">{fallback}</div>}
           {top && <span className="memetext top">{top}</span>}
@@ -437,8 +449,7 @@ function MemePopup({ label, img, alt, fit, fallback = "🫰", top, bottom, quote
           {action && <button onClick={action.onClick}>{action.label}</button>}
           <button className="go" onClick={onClose}>😂 Close</button>
         </div>
-      </div>
-    </div>
+    </Sheet>
   );
 }
 
@@ -517,11 +528,6 @@ function ButtholeMeme({ view, d, week, onClose }) {
 // ---------------- team popup ----------------
 export function TeamPopup({ view, team: t, me, onClose, onTeam, back }) {
   const d = useDerived(view);
-  useEffect(() => {
-    const f = e => e.key === "Escape" && onClose();
-    addEventListener("keydown", f);
-    return () => removeEventListener("keydown", f);
-  }, [onClose]);
   const info = view.teams[t];
   if (!info) return null;
   const v = d.vt(t), st = view.nflStandings?.teams?.[t];
@@ -531,8 +537,7 @@ export function TeamPopup({ view, team: t, me, onClose, onTeam, back }) {
   const games = d.gamesOf(t);
   const seed = st?.seed ? (st.seed <= 7 ? `${info.conf} #${st.seed} seed if the season ended today` : `${ordinal(st.seed)} in the ${info.conf}, outside the playoff line`) : null;
   return (
-    <div className="sheetback" onClick={onClose}>
-      <div className="sheet team-sheet" role="dialog" aria-modal="true" aria-label={info.name} onClick={e => e.stopPropagation()}>
+    <Sheet kind="team-sheet" label={info.name} onClose={onClose}>
         {back && <button className="tiny tpback" onClick={back.go}>← {view.teams[back.team]?.name || back.team}</button>}
         <div className="tphead">
           <img src={logo(t)} alt="" />
@@ -571,8 +576,7 @@ export function TeamPopup({ view, team: t, me, onClose, onTeam, back }) {
           })}
         </div>
         <button className="go" onClick={onClose}>Close</button>
-      </div>
-    </div>
+    </Sheet>
   );
 }
 
@@ -722,8 +726,7 @@ function Calculator({ d, view }) {
 export function WhoAreYou({ view, me, onPick, onClose }) {
   const d = useDerived(view);
   return (
-    <div className="sheetback" onClick={onClose}>
-      <div className="sheet who" role="dialog" aria-modal="true" aria-label="Pick your group" onClick={e => e.stopPropagation()}>
+    <Sheet kind="who" label="Pick your group" onClose={onClose}>
         <h2>Which group are you?</h2>
         <p className="dim small">Your group gets highlighted everywhere and you can filter to your games. This browser remembers your pick.</p>
         <div className="whogrid">
@@ -736,8 +739,7 @@ export function WhoAreYou({ view, me, onPick, onClose }) {
         </div>
         <button className="seg" onClick={() => onPick("none")}>Just browsing</button>
         {me && <CopyLink gid={me} name={d.name(me)} />}
-      </div>
-    </div>
+    </Sheet>
   );
 }
 
