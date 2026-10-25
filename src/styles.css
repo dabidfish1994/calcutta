@@ -358,9 +358,13 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 /* the Bills fat finger */
 .clickable { cursor: pointer; }
 .sheet.meme-sheet { max-width: 26rem; display: flex; flex-direction: column; gap: .6rem; padding-top: 1rem; }
+.sheet.meme-sheet > *, .sheet.team-sheet > * { flex-shrink: 0; } /* scroll the sheet, never squash the picture */
 .meme { position: relative; border-radius: 12px; overflow: hidden; background: #000; }
 .meme img { display: block; width: 100%; aspect-ratio: 4 / 5; object-fit: cover; object-position: 50% 32%; }
 .memefallback { aspect-ratio: 4 / 5; display: grid; place-items: center; font-size: 6rem; }
+.meme.contain img { object-fit: contain; }
+/* a picture that is already a meme: show all of it, capped so the stats stay close */
+.meme.full img { aspect-ratio: auto; width: auto; max-width: 100%; height: auto; max-height: 70vh; max-height: 70dvh; margin: 0 auto; }
 .memetext {
   position: absolute; left: .4rem; right: .4rem; display: block; text-align: center; text-transform: uppercase;
   white-space: normal; overflow-wrap: break-word; text-wrap: balance;

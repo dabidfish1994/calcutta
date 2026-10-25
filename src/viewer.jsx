@@ -87,6 +87,25 @@ function derive(view) {
     return Object.values(rows);
   }
 
+  // Butthole team of the week: worst record in a finished week. Ties go to more losses,
+  // then fewer dollars that week, then lower in the season standings.
+  function butthole(week) {
+    if (!week || !isDone(week)) return null;
+    const pct = r => r.w / (r.w + r.l);
+    const row = weekTable(week).filter(r => r.w + r.l > 0)
+      .sort((a, b) => pct(a) - pct(b) || b.l - a.l || a.earned - b.earned || bankedNow(a.gid) - bankedNow(b.gid))[0];
+    if (!row) return null;
+    let worst = null;
+    for (const g of week.games) {
+      if (!g.final || !g.winner) continue;
+      const loser = g.winner === g.home ? g.away : g.home;
+      if (!((g.winner === g.home ? g.awayOwners : g.homeOwners)?.[row.gid] > 0)) continue;
+      const ls = loser === g.home ? g.homeScore : g.awayScore, ws = loser === g.home ? g.awayScore : g.homeScore;
+      if (!worst || ws - ls > worst.margin) worst = { team: loser, opp: g.winner, ls, ws, margin: ws - ls };
+    }
+    return { ...row, worst, lastGame: week.games.reduce((m, g) => (g.date > m ? g.date : m), "") };
+  }
+
   function recap(week) {
     const done = week.games.filter(g => g.final && g.winner);
     if (!done.length) return [];
@@ -94,8 +113,10 @@ function derive(view) {
     const out = [];
     const top = [...tbl].sort((a, b) => b.earned - a.earned)[0];
     if (top && top.earned > 0) out.push({ icon: "🏆", gid: top.gid, text: `${name(top.gid)} led ${week.label} with ${fmt$(top.earned)} (${fmtWL(top)})` });
+    const bh = butthole(week);
+    if (bh) out.push({ icon: "🍑", gid: bh.gid, butthole: true, text: `Butthole team of the week: ${name(bh.gid)} (${fmtWL(bh)})` });
     for (const r of tbl) if (r.l === 0 && r.w >= 2) out.push({ icon: "🧹", gid: r.gid, text: `${name(r.gid)} swept: ${fmtWL(r)}` });
-    for (const r of tbl) if (r.w === 0 && r.l >= 1) out.push({ icon: "🥶", gid: r.gid, text: `${name(r.gid)} went ${fmtWL(r)}` });
+    for (const r of tbl) if (r.w === 0 && r.l >= 1 && r.gid !== bh?.gid) out.push({ icon: "🥶", gid: r.gid, text: `${name(r.gid)} went ${fmtWL(r)}` });
     const pairs = {};
     for (const g of done) {
       const ho = Object.keys(g.homeOwners || {}).filter(k => g.homeOwners[k] > 0), ao = Object.keys(g.awayOwners || {}).filter(k => g.awayOwners[k] > 0);
@@ -129,7 +150,7 @@ function derive(view) {
 
   return {
     view, P, pot, config, groups, weeks, owners, $, color, name, short, vt, teamsOf, paidFor, record, banked$, projected$,
-    doneWeeks, weekEarn, cum, stats, weekTable, recap, credit$, seedOf, eventsFor, gamesOf, isDone, rankLive, bankedBy
+    doneWeeks, weekEarn, cum, stats, weekTable, recap, butthole, credit$, seedOf, eventsFor, gamesOf, isDone, rankLive, bankedBy
   };
 }
 
@@ -204,7 +225,9 @@ export function Season({ view, me }) {
   const [teamPop, setTeamPop] = useState(null);
   const openTeam = setTeamPop;
   const jumpTo = gid => document.getElementById(gid === me ? "roster-me" : `roster-${gid}`)?.scrollIntoView({ block: "start" });
-  const openGroup = gid => (GROUP_MEMES[gid] ? setMeme(gid) : jumpTo(gid));
+  // a group's meme switches on once its photo is uploaded (the Bills one always has its stats)
+  const memeOf = gid => { const m = GROUP_MEMES[gid]; return m && (m.bills || view.meme?.[m.id]) ? m : null; };
+  const openGroup = gid => (memeOf(gid) ? setMeme(gid) : jumpTo(gid));
   const lastBillsLoss = useMemo(() => d.weeks.flatMap(w => w.games)
     .filter(g => (g.home === "BUF" || g.away === "BUF") && g.final && g.winner && g.winner !== "BUF")
     .sort((a, b) => b.date.localeCompare(a.date))[0] || null, [d]);
@@ -215,6 +238,21 @@ export function Season({ view, me }) {
     try { localStorage.setItem("cc-ff-seen", JSON.stringify([...seen, lastBillsLoss.id].slice(-40))); } catch {}
     setMeme("loss");
   }, [lastBillsLoss?.id]);
+  const [buttWeek, setButtWeek] = useState(null);
+  const lastDone = d.doneWeeks[d.doneWeeks.length - 1];
+  const lastButt = useMemo(() => d.butthole(lastDone), [d]);
+  useEffect(() => { // butthole team of the week: once per device per finished week, after any Bills popup
+    if (!lastButt || me === undefined || meme || teamPop || buttWeek || Date.now() - Date.parse(lastButt.lastGame) > 7 * 86400e3) return;
+    let seen = []; try { seen = JSON.parse(localStorage.getItem("cc-bh-seen") || "[]"); } catch {}
+    if (!seen.includes(lastDone.key)) setButtWeek(lastDone.key);
+  }, [lastDone?.key, !!lastButt, me, meme, teamPop]);
+  const closeButt = () => { // counts as seen once it's closed, so a reconnect mid-load can't swallow it
+    try {
+      const seen = JSON.parse(localStorage.getItem("cc-bh-seen") || "[]");
+      if (!seen.includes(buttWeek)) localStorage.setItem("cc-bh-seen", JSON.stringify([...seen, buttWeek].slice(-30)));
+    } catch {}
+    setButtWeek(null);
+  };
   const memeKey = JSON.stringify(view.meme || {});
   useEffect(() => { // warm the meme photos so a popup opens with its picture already loaded
     const timer = setTimeout(() => Object.entries(view.meme || {}).forEach(([id, v]) => { new Image().src = `/api/meme/${id}?v=${v}`; }), 2500);
@@ -273,7 +311,7 @@ export function Season({ view, me }) {
             const s = summaries[g.id]; const pj = proj[g.id] || {};
             return (
               <tr key={g.id} className={(g.id === me ? "hl" : "") + " clickable"} onClick={() => openGroup(g.id)}>
-                <td>{memberNames(g.name)}{GROUP_MEMES[g.id] ? ` ${GROUP_MEMES[g.id].tag}` : ""}</td>
+                <td>{memberNames(g.name)}{memeOf(g.id) ? ` ${memeOf(g.id).tag}` : ""}</td>
                 <td className="r">{d.teamsOf(g.id).length}</td>
                 <td className="r">{fmt$(s.earnedDollars)}</td>
                 <td className="r">{fmt$(pj.projectedEarned || 0)}</td>
@@ -304,8 +342,8 @@ export function Season({ view, me }) {
               <span className="rosteravatars">
                 {membersOf(g.name).map(n => <Avatar key={n} name={n} title={n} size={22} mode={me ? "weak" : "hero"} />)}
               </span>
-              {GROUP_MEMES[g.id]
-                ? <button className="linkish" onClick={() => setMeme(g.id)}><b>{memberNames(g.name)} {GROUP_MEMES[g.id].tag}</b></button>
+              {memeOf(g.id)
+                ? <button className="linkish" onClick={() => setMeme(g.id)}><b>{memberNames(g.name)} {memeOf(g.id).tag}</b></button>
                 : <b>{memberNames(g.name)}</b>}
               <span className="dim">{held.length} team{held.length === 1 ? "" : "s"} · spent {fmt$(s.spent - s.tradeCash)} · banked {fmt$(s.earnedDollars)} · proj. net{" "}
                 <b className={(pj.projectedNet || 0) >= 0 ? "green" : "red"}>{(pj.projectedNet || 0) >= 0 ? "+" : ""}{fmt$(pj.projectedNet || 0)}</b>
@@ -328,7 +366,11 @@ export function Season({ view, me }) {
       {recap.length > 0 && (
         <div className="recap">
           <h3>{week.label} recap</h3>
-          {recap.map((x, i) => <div key={i} className="recapline"><span>{x.icon}</span><span>{x.text}</span></div>)}
+          {recap.map((x, i) => (
+            <div key={i} className={"recapline" + (x.butthole ? " clickable" : "")} {...(x.butthole ? tapProps(() => setButtWeek(week.key)) : {})}>
+              <span>{x.icon}</span><span>{x.text}</span>
+            </div>
+          ))}
         </div>
       )}
       {me && week && (
@@ -346,12 +388,13 @@ export function Season({ view, me }) {
       {teamPop && <TeamTap view={view} team={teamPop} me={me} onClose={() => setTeamPop(null)} />}
       {meme === "loss" && <FatFinger view={view} d={d} reason="loss" onClose={() => setMeme(null)} />}
       {GROUP_MEMES[meme] && <GroupMeme view={view} d={d} gid={meme} onClose={() => setMeme(null)} onTeams={() => { setMeme(null); jumpTo(meme); }} />}
+      {buttWeek && <ButtholeMeme view={view} d={d} week={weeks.find(w => w.key === buttWeek)} onClose={closeButt} onTeams={gid => { closeButt(); jumpTo(gid); }} />}
     </div>
   );
 }
 
 // ---------------- meme popups ----------------
-function MemePopup({ label, img, alt, top, bottom, quote, cite, stats, foot, action, onClose }) {
+function MemePopup({ label, img, alt, fit, fallback = "🫰", top, bottom, quote, cite, stats, foot, action, onClose }) {
   useEffect(() => {
     const f = e => e.key === "Escape" && onClose();
     addEventListener("keydown", f);
@@ -360,8 +403,8 @@ function MemePopup({ label, img, alt, top, bottom, quote, cite, stats, foot, act
   return (
     <div className="sheetback" onClick={onClose}>
       <div className="sheet meme-sheet" role="dialog" aria-modal="true" aria-label={label} onClick={e => e.stopPropagation()}>
-        <div className="meme">
-          {img ? <img src={img} alt={alt} /> : <div className="memefallback" aria-hidden="true">🫰</div>}
+        <div className={"meme" + (fit ? ` ${fit}` : "")}>
+          {img ? <img src={img} alt={alt} /> : <div className="memefallback" aria-hidden="true">{fallback}</div>}
           {top && <span className="memetext top">{top}</span>}
           {bottom && <span className="memetext bottom">{bottom}</span>}
         </div>
@@ -412,6 +455,7 @@ function FatFinger({ view, d, reason, action, onClose }) {
 // server volume (POST /api/admin/meme/<id>), never in the repo.
 const GROUP_MEMES = {
   g2: { bills: true, tag: "💸" }, // Dylan's group gets the fat-finger meme
+  g3: { id: "war", tag: "🎖️", label: "Secretary of War", alt: "Breaking news: new Secretary of War named", fit: "full" }, // the picture is its own caption
   g4: { id: "fuller", tag: "🤵", label: "Fuller", alt: "Fuller in a tuxedo, checking the standings", top: `6'7"`, bottom: "Can't dunk" },
   g6: { id: "mike", tag: "🍼", label: "Mike", alt: "Mike in a hanbok and gat in Seoul", bottom: "Our wittle brother" }
 };
@@ -424,11 +468,27 @@ function GroupMeme({ view, d, gid, onClose, onTeams }) {
   return (
     <MemePopup label={m.label} onClose={onClose}
       img={view.meme?.[m.id] ? `/api/meme/${m.id}?v=${view.meme[m.id]}` : null}
-      alt={m.alt} top={m.top} bottom={m.bottom}
+      alt={m.alt} fit={m.fit} top={m.top} bottom={m.bottom}
       stats={[["Money banked", fmt$(s.banked)], ["League rank", ordinal(s.rank)], ["Spent at auction", fmt$(s.netCost)],
         ["Projected net", fmtSigned$(s.projNet), s.projNet >= 0 ? "green" : "red"]]}
       foot={`${d.name(gid)}: ${s.teams.length} team${s.teams.length === 1 ? "" : "s"}, ${+s.record.w.toFixed(1)}–${+s.record.l.toFixed(1)} combined.`}
       action={action} />
+  );
+}
+
+// Butthole team of the week (picture uploaded as meme "butt").
+function ButtholeMeme({ view, d, week, onClose, onTeams }) {
+  const bh = d.butthole(week);
+  if (!bh) return null;
+  const w = bh.worst;
+  return (
+    <MemePopup label="Butthole team of the week" onClose={onClose} fit="contain" fallback="🍑"
+      img={view.meme?.butt ? `/api/meme/butt?v=${view.meme.butt}` : null} alt="Butthole emoji"
+      top="Butthole team of the week" bottom={d.name(bh.gid)}
+      stats={[[`${week.label} record`, fmtWL(bh)], ["Earned this week", fmt$(bh.earned)],
+        ["Ugliest loss", w ? `${w.team} lost by ${w.margin}` : "—"], ["Season rank", ordinal(d.rankLive[bh.gid])]]}
+      foot={`Worst record of ${week.label}. Ties go to more losses, then fewer dollars.`}
+      action={{ label: `See ${d.name(bh.gid)}'s teams`, onClick: () => onTeams(bh.gid) }} />
   );
 }
 
