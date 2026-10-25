@@ -419,7 +419,7 @@ function GroupMeme({ view, d, gid, onClose, onTeams }) {
       alt={m.alt} top={m.top} bottom={m.bottom}
       stats={[["Money banked", fmt$(s.banked)], ["League rank", ordinal(s.rank)], ["Spent at auction", fmt$(s.netCost)],
         ["Projected net", fmtSigned$(s.projNet), s.projNet >= 0 ? "green" : "red"]]}
-      foot={`${d.name(gid)}: ${s.teams.length} teams, ${+s.record.w.toFixed(1)}–${+s.record.l.toFixed(1)} combined.`}
+      foot={`${d.name(gid)}: ${s.teams.length} team${s.teams.length === 1 ? "" : "s"}, ${+s.record.w.toFixed(1)}–${+s.record.l.toFixed(1)} combined.`}
       action={{ label: `See ${d.name(gid)}'s teams`, onClick: onTeams }} />
   );
 }
