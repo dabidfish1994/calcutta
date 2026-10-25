@@ -151,7 +151,7 @@ function Crew({ d, gid, me, size = 20 }) {
 }
 
 // ---------------- game card (scoreboard style) ----------------
-function GameCard({ d, g, me, onMeme }) {
+function GameCard({ d, g, me, onTeam }) {
   const mine = me && (g.homeOwners?.[me] > 0 || g.awayOwners?.[me] > 0);
   const live = g.state === "in";
   const pending = !g.final && g.state !== "post";
@@ -160,15 +160,14 @@ function GameCard({ d, g, me, onMeme }) {
     { team: g.home, score: g.homeScore, own: g.homeOwners, p: g.pHome }
   ];
   const rec = t => recStr(d.record(t));
-  const bills = onMeme && (g.home === "BUF" || g.away === "BUF");
-  const tap = bills ? { role: "button", tabIndex: 0, onClick: () => onMeme("tap"), onKeyDown: e => e.key === "Enter" && onMeme("tap") } : {};
   return (
-    <div className={"gcard" + (mine ? " mine" : "") + (live ? " live" : "") + (bills ? " clickable" : "")} style={mine ? { "--mine": d.color(me) } : undefined} {...tap}>
+    <div className={"gcard" + (mine ? " mine" : "") + (live ? " live" : "")} style={mine ? { "--mine": d.color(me) } : undefined}>
       <div className="gstatus"><span className={live ? "livepill" : "dim"}>{gameStatus(g)}</span>{g.neutral && <span className="dim"> · neutral site</span>}</div>
       {rows.map(r => {
         const won = g.final && g.winner === r.team, lost = g.final && g.winner && g.winner !== r.team;
         return (
-          <div key={r.team} className={"grow" + (won ? " won" : "") + (lost ? " lost" : "")}>
+          <div key={r.team} className={"grow" + (won ? " won" : "") + (lost ? " lost" : "") + (onTeam ? " clickable" : "")}
+            {...(onTeam ? { role: "button", tabIndex: 0, onClick: () => onTeam(r.team), onKeyDown: e => e.key === "Enter" && onTeam(r.team) } : {})}>
             <span className="gteam">
               <img src={logo(r.team)} alt="" /><b>{r.team}</b><span className="dim">{rec(r.team)}</span>
             </span>
@@ -200,6 +199,9 @@ export function Season({ view, me }) {
   const [wkSel, setWkSel] = useState(null);
   const [onlyMine, setOnlyMine] = useState(false);
   const [meme, setMeme] = useState(null);
+  const [teamPop, setTeamPop] = useState(null);
+  const openTeam = t => (t === "BUF" ? setMeme("tap") : setTeamPop(t));
+  const jumpTo = gid => document.getElementById(gid === me ? "roster-me" : `roster-${gid}`)?.scrollIntoView({ block: "start" });
   const lastBillsLoss = useMemo(() => d.weeks.flatMap(w => w.games)
     .filter(g => (g.home === "BUF" || g.away === "BUF") && g.final && g.winner && g.winner !== "BUF")
     .sort((a, b) => b.date.localeCompare(a.date))[0] || null, [d]);
@@ -228,9 +230,9 @@ export function Season({ view, me }) {
     const projected = banked + ((pt.futureShare || 0) / 100) * pot * stake;
     const paid = d.paidFor(t, gid);
     const bills = t === "BUF";
-    const tap = bills ? { role: "button", tabIndex: 0, onClick: () => setMeme("tap"), onKeyDown: e => e.key === "Enter" && setMeme("tap") } : {};
+    const tap = { role: "button", tabIndex: 0, onClick: () => openTeam(t), onKeyDown: e => e.key === "Enter" && openTeam(t) };
     return (
-      <div key={t} className={"spot" + (gid === me ? "" : " rival") + (bills ? " clickable" : "")} {...tap}>
+      <div key={t} className={"spot clickable" + (gid === me ? "" : " rival")} {...tap}>
         <div className="spothead"><img src={logo(t)} alt="" /><div><b>{moji(t)} {teams[t].name}{bills ? " 💸" : ""}</b><div className="dim">{recStr(d.record(t))}{stake < 1 ? ` · ${fmtPct(stake * 100)} stake` : ""} · net cost {fmt$(paid)}</div></div></div>
         <div className="spotnums">
           <div><label>banked</label><b>{fmt$(banked)}</b></div>
@@ -263,7 +265,7 @@ export function Season({ view, me }) {
           {groups.map(g => {
             const s = summaries[g.id]; const pj = proj[g.id] || {};
             return (
-              <tr key={g.id} className={(g.id === me ? "hl" : "") + (g.id === FULLER_GROUP ? " clickable" : "")} onClick={g.id === FULLER_GROUP ? () => setMeme("fuller") : undefined}>
+              <tr key={g.id} className={(g.id === me ? "hl" : "") + " clickable"} onClick={() => (g.id === FULLER_GROUP ? setMeme("fuller") : jumpTo(g.id))}>
                 <td>{memberNames(g.name)}{g.id === FULLER_GROUP ? " 🤵" : ""}</td>
                 <td className="r">{d.teamsOf(g.id).length}</td>
                 <td className="r">{fmt$(s.earnedDollars)}</td>
@@ -278,7 +280,7 @@ export function Season({ view, me }) {
       </table></div>
 
       {me && (<>
-        <h2>🧢 Your teams</h2>
+        <h2 id="roster-me">🧢 Your teams</h2>
         <div className="spots">
           {myTeams.map(t => teamCard(t, me))}
           {!myTeams.length && <p className="dim">No teams yet.</p>}
@@ -290,7 +292,7 @@ export function Season({ view, me }) {
       {others.map(g => {
         const held = d.teamsOf(g.id); const s = summaries[g.id]; const pj = proj[g.id] || {};
         return (
-          <div key={g.id} className="roster">
+          <div key={g.id} className="roster" id={`roster-${g.id}`}>
             <div className="rosterhead">
               <span className="rosteravatars">
                 {membersOf(g.name).map(n => <Avatar key={n} name={n} title={n} size={22} mode={me ? "weak" : "hero"} />)}
@@ -330,10 +332,11 @@ export function Season({ view, me }) {
       {byDay.map(day => (
         <div key={day.day}>
           <h3>{day.day}</h3>
-          <div className="gcards">{day.games.map(g => <GameCard key={g.id} d={d} g={g} me={me} onMeme={setMeme} />)}</div>
+          <div className="gcards">{day.games.map(g => <GameCard key={g.id} d={d} g={g} me={me} onTeam={openTeam} />)}</div>
         </div>
       ))}
       {week && !games.length && <p className="dim">None of your teams play this week.</p>}
+      {teamPop && <TeamPopup view={view} team={teamPop} me={me} onClose={() => setTeamPop(null)} />}
       {meme === "fuller" ? <FullerMeme view={view} d={d} onClose={() => setMeme(null)} />
         : meme && <FatFinger view={view} d={d} reason={meme} onClose={() => setMeme(null)} />}
     </div>
@@ -414,6 +417,73 @@ function FullerMeme({ view, d, onClose }) {
         ["Projected net", fmtSigned$(s.projNet), s.projNet >= 0 ? "green" : "red"]]}
       foot={`${d.name(FULLER_GROUP)}: ${s.teams.length} teams, ${+s.record.w.toFixed(1)}–${+s.record.l.toFixed(1)} combined.`} />
   );
+}
+
+// ---------------- team popup ----------------
+export function TeamPopup({ view, team: t, me, onClose }) {
+  const d = useDerived(view);
+  useEffect(() => {
+    const f = e => e.key === "Escape" && onClose();
+    addEventListener("keydown", f);
+    return () => removeEventListener("keydown", f);
+  }, [onClose]);
+  const info = view.teams[t];
+  if (!info) return null;
+  const v = d.vt(t), st = view.nflStandings?.teams?.[t];
+  const sale = view.state.auction.sales[t];
+  const own = d.owners[t] || (sale ? { [sale.group]: 100 } : {});
+  const banked = d.banked$(t), projected = d.projected$(t);
+  const games = d.gamesOf(t);
+  const seed = st?.seed ? (st.seed <= 7 ? `${info.conf} #${st.seed} seed if the season ended today` : `${ordinal(st.seed)} in the ${info.conf}, outside the playoff line`) : null;
+  return (
+    <div className="sheetback" onClick={onClose}>
+      <div className="sheet team-sheet" role="dialog" aria-modal="true" aria-label={info.name} onClick={e => e.stopPropagation()}>
+        <div className="tphead">
+          <img src={logo(t)} alt="" />
+          <div>
+            <h2>{moji(t)} {info.name}</h2>
+            <div className="dim small">{info.conf} {info.div} · {recStr(d.record(t))}{st?.streak && st.streak !== "-" ? ` · ${st.streak}` : ""}{st?.diff != null ? ` · ${st.diff > 0 ? "+" : ""}${st.diff} pt diff` : ""}</div>
+            {seed && <div className="small">{seed}</div>}
+          </div>
+        </div>
+        <div className="tpowner"><OwnerChips d={d} own={own} me={me} />{sale && <span className="dim small">bought for {fmt$(sale.amount)}</span>}</div>
+        <div className="memestats">
+          <div><label>Earned so far</label><b>{fmt$(banked)}</b></div>
+          <div><label>Projected season</label><b>{fmt$(projected)}</b></div>
+          {sale && <div><label>vs price paid</label><b className={projected - sale.amount >= 0 ? "green" : "red"}>{fmtSigned$(projected - sale.amount)}</b></div>}
+          <div><label>Make playoffs</label><b>{pctRound(v.pPlayoffs ?? 0)}</b></div>
+        </div>
+        <h3>Schedule</h3>
+        <div className="tsched">
+          {games.map(g => {
+            const home = g.home === t, opp = home ? g.away : g.home;
+            const won = g.final && g.winner === t, lost = g.final && g.winner && g.winner !== t;
+            const p = g.pHome == null ? null : home ? g.pHome : 1 - g.pHome;
+            const earned = (g.credits || []).filter(c => c.team === t).reduce((sum, c) => sum + c.credit, 0);
+            return (
+              <div key={g.id} className={"tsrow" + (won ? " won" : "") + (lost ? " lost" : "")}>
+                <span className="dim small">{g.seasontype === 2 ? `Wk ${g.week}` : g.weekLabel}</span>
+                <span className="tsopp">{home ? "vs" : "@"} <img src={logo(opp)} alt="" /> {opp}</span>
+                <span className="tsres">
+                  {g.final ? <><b>{won ? "W" : lost ? "L" : "T"}</b> {home ? `${g.homeScore}–${g.awayScore}` : `${g.awayScore}–${g.homeScore}`}</>
+                    : g.state === "in" ? <span className="livepill">{gameStatus(g)}</span>
+                      : <span className="dim">{p != null ? `${pctRound(p)} · ` : ""}{gameStatus(g)}</span>}
+                </span>
+                <span className="tsearn">{earned > 0 ? <b className="green">+{fmt$(d.$(earned))}</b> : ""}</span>
+              </div>
+            );
+          })}
+        </div>
+        <button className="go" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+// The Bills open the fat-finger meme; every other team opens its popup.
+export function TeamTap({ view, team, me, onClose }) {
+  const d = useDerived(view);
+  return team === "BUF" ? <FatFinger view={view} d={d} reason="tap" onClose={onClose} /> : <TeamPopup view={view} team={team} me={me} onClose={onClose} />;
 }
 
 // ---------------- RULES & PAYOUTS ----------------

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, membersOf } from "./avatars.jsx";
 
 import { fmt$, fmtPct, logo, moji, act, shortName, memberNames, groupName, getAdminKey, setAdminKey, useMe, useRoute } from "./util.jsx";
-import { Season, Rules, WhoAreYou } from "./viewer.jsx";
+import { Season, Rules, WhoAreYou, TeamTap } from "./viewer.jsx";
 
 function useLive(onTranscript) {
   const [view, setView] = useState(null);
@@ -69,7 +69,7 @@ export default function App() {
   const meName = me ? view.state.config.groups.find(g => g.id === me)?.name : null;
   let body;
   if (tab === "season") body = <Season view={view} me={me} />;
-  else if (tab === "odds") body = <Odds view={view} />;
+  else if (tab === "odds") body = <Odds view={view} me={me} />;
   else if (tab === "rules") body = <Rules view={view} me={me} />;
   else if (tab === "trades") body = <Trades view={view} />;
   else if (tab === "board") body = <Board view={view} />;
@@ -908,8 +908,9 @@ const american = o => (o == null ? "—" : o > 0 ? `+${o}` : `${o}`);
 const pct = p => `${Math.round(p * 100)}%`;
 const pct1 = p => `${(p * 100).toFixed(1)}%`;
 
-function Odds({ view }) {
+function Odds({ view, me }) {
   const { teams, valuation, repricing } = view;
+  const [pop, setPop] = useState(null);
   const inSeason = !!view.seasonStarted || view.state.auction.phase === "done";
   const money = t => inSeason ? ((valuation.teams[t]?.share || 0) / 100) * view.potForSettlement : (repricing.fair[t] || 0);
   if (!valuation?.teams || !Object.values(valuation.teams)[0]?.market)
@@ -938,7 +939,7 @@ function Odds({ view }) {
         </tr></thead>
         <tbody>
           {rows.map(({ t, v }) => (
-            <tr key={t}>
+            <tr key={t} className={inSeason ? "clickable" : ""} onClick={inSeason ? () => setPop(t) : undefined}>
               <td><img className="tinylogo" src={logo(t)} alt="" /> {moji(t)} {teams[t].name} {disagree(v) && <em className="amber" title={`market P(playoffs) ${pct(v.market.pPlayoff)} vs model ${pct(v.sim.pPlayoff)}; market P(SB) ${pct1(v.market.pSb)} vs model ${pct1(v.sim.pSb)}`}>⚡</em>}</td>
               <td className="r">{v.market.winTotal ?? "—"}</td>
               <td className="r">{(v.expWinsView ?? v.expWins).toFixed(1)}</td>
@@ -950,6 +951,8 @@ function Odds({ view }) {
           ))}
         </tbody>
       </table></div>
+
+      {pop && <TeamTap view={view} team={pop} me={me} onClose={() => setPop(null)} />}
 
       <h2>🔮 Most likely playoff matchups</h2>
       <p className="dim">From {""}the simulated seasons — how often each pairing occurs (home team second, seeds decide home field).</p>

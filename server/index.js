@@ -821,3 +821,20 @@ app.use(express.static(path.join(ROOT, "dist")));
 app.get("*", (_req, res) => res.sendFile(path.join(ROOT, "dist", "index.html")));
 
 server.listen(PORT, () => console.log(`Cardinal Calcutta war room on http://localhost:${PORT}`));
+
+// Graceful shutdown: Railway sends SIGTERM to the old server on every deploy. Exiting with an
+// error code made each replaced deploy show as "Deployment failed" (and emailed about it), and
+// could drop a change still waiting in the 250 ms save debounce. Save now, close, exit 0.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received — saving state and shutting down`);
+  clearTimeout(saveTimer);
+  try { fs.writeFileSync(DATA("state.json"), JSON.stringify(state, null, 1)); } catch (e) { console.error("final save failed:", e.message); }
+  for (const c of wss.clients) { try { c.close(1001, "server restarting"); } catch {} }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
