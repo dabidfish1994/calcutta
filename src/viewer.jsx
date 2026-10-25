@@ -352,8 +352,8 @@ function MemePopup({ label, img, alt, top, bottom, quote, cite, stats, foot, onC
       <div className="sheet meme-sheet" role="dialog" aria-modal="true" aria-label={label} onClick={e => e.stopPropagation()}>
         <div className="meme">
           {img ? <img src={img} alt={alt} /> : <div className="memefallback" aria-hidden="true">🫰</div>}
-          <span className="memetext top">{top}</span>
-          <span className="memetext bottom">{bottom}</span>
+          {top && <span className="memetext top">{top}</span>}
+          {bottom && <span className="memetext bottom">{bottom}</span>}
         </div>
         {quote && <blockquote className="memequote">“{quote}”<cite>{cite}</cite></blockquote>}
         <div className="memestats">{stats.map(([l, v, tone]) => <div key={l}><label>{l}</label><b className={tone || ""}>{v}</b></div>)}</div>
@@ -364,7 +364,7 @@ function MemePopup({ label, img, alt, top, bottom, quote, cite, stats, foot, onC
   );
 }
 
-// Sept 3, Calcutta Time chat: "That was an accidental fat finger." He meant $300.
+// Sept 3, Calcutta Time chat: "That was an accidental fat finger."
 function FatFinger({ view, d, reason, onClose }) {
   const sale = view.state.auction.sales.BUF;
   if (!sale) return null;
@@ -389,7 +389,7 @@ function FatFinger({ view, d, reason, onClose }) {
       img={view.meme?.buf ? `/api/meme/buf?v=${view.meme.buf}` : null}
       alt="The commissioner, moments after bidding $3,000 on the Bills"
       top={lost ? (rec.l > 1 ? "Bills lost again" : "Bills lost") : `Paid ${fmt$(paid)} for the Bills`}
-      bottom={lost ? `Still paid ${fmt$(paid)}` : "Meant to type $300"}
+      bottom={lost ? `Still paid ${fmt$(paid)}` : null}
       quote="That was an accidental fat finger." cite="dylan.burke, Calcutta Time chat, Sept 3"
       stats={[["Bills", recStr(rec)], ["Earned so far", fmt$(banked)], ["Projected season", fmt$(projected)],
         ["Cost of the extra zero", fmtSigned$(projected - paid), projected - paid >= 0 ? "green" : "red"]]}
@@ -397,20 +397,19 @@ function FatFinger({ view, d, reason, onClose }) {
   );
 }
 
-// Mark · Fuller: spent the least of any group that actually bid, and lead the league anyway.
+// Fuller.
 const FULLER_GROUP = "g4";
 function FullerMeme({ view, d, onClose }) {
   const g = d.groups.find(x => x.id === FULLER_GROUP);
   if (!g) return null;
   const s = d.stats(FULLER_GROUP);
-  const left = (g.budget || 7000) - (view.summaries[FULLER_GROUP]?.spent || 0);
   const ord = n => n + (["th", "st", "nd", "rd"][(n % 100 >> 3) ^ 1 && n % 10] || "th");
   return (
     <MemePopup label="Fuller" onClose={onClose}
       img={view.meme?.fuller ? `/api/meme/fuller?v=${view.meme.fuller}` : null}
       alt="Fuller in a tuxedo, checking the standings"
-      top={`Left ${fmt$(left)} on the table`}
-      bottom={s.rank === 1 ? "Still in 1st place" : `${ord(s.rank)} place. Unbothered.`}
+      top={`6'7"`}
+      bottom="Can't dunk"
       stats={[["Money banked", fmt$(s.banked)], ["League rank", ord(s.rank)], ["Spent at auction", fmt$(s.netCost)],
         ["Projected net", fmtSigned$(s.projNet), s.projNet >= 0 ? "green" : "red"]]}
       foot={`${d.name(FULLER_GROUP)}: ${s.teams.length} teams, ${+s.record.w.toFixed(1)}–${+s.record.l.toFixed(1)} combined.`} />
