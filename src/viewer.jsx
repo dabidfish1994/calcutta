@@ -388,7 +388,7 @@ export function Season({ view, me }) {
       {teamPop && <TeamTap view={view} team={teamPop} me={me} onClose={() => setTeamPop(null)} />}
       {meme === "loss" && <FatFinger view={view} d={d} reason="loss" onClose={() => setMeme(null)} />}
       {GROUP_MEMES[meme] && <GroupMeme view={view} d={d} gid={meme} onClose={() => setMeme(null)} onTeams={() => { setMeme(null); jumpTo(meme); }} />}
-      {buttWeek && <ButtholeMeme view={view} d={d} week={weeks.find(w => w.key === buttWeek)} onClose={closeButt} onTeams={gid => { closeButt(); jumpTo(gid); }} />}
+      {buttWeek && <ButtholeMeme view={view} d={d} week={weeks.find(w => w.key === buttWeek)} onClose={closeButt} />}
     </div>
   );
 }
@@ -409,7 +409,7 @@ function MemePopup({ label, img, alt, fit, fallback = "🫰", top, bottom, quote
           {bottom && <span className="memetext bottom">{bottom}</span>}
         </div>
         {quote && <blockquote className="memequote">“{quote}”<cite>{cite}</cite></blockquote>}
-        <div className="memestats">{stats.map(([l, v, tone]) => <div key={l}><label>{l}</label><b className={tone || ""}>{v}</b></div>)}</div>
+        {stats && <div className="memestats">{stats.map(([l, v, tone]) => <div key={l}><label>{l}</label><b className={tone || ""}>{v}</b></div>)}</div>}
         {foot && <p className="small">{foot}</p>}
         {action && <button onClick={action.onClick}>{action.label}</button>}
         <button className="go" onClick={onClose}>😂 Close</button>
@@ -477,18 +477,15 @@ function GroupMeme({ view, d, gid, onClose, onTeams }) {
 }
 
 // Butthole team of the week (picture uploaded as meme "butt").
-function ButtholeMeme({ view, d, week, onClose, onTeams }) {
+// Just the picture and who it is: no stats, sized to fit without scrolling.
+function ButtholeMeme({ view, d, week, onClose }) {
   const bh = d.butthole(week);
   if (!bh) return null;
-  const w = bh.worst;
+  const crew = membersOf(groupName(d.config, bh.gid));
   return (
-    <MemePopup label="Butthole team of the week" onClose={onClose} fit="contain" fallback="🍑"
+    <MemePopup label="Butthole team of the week" onClose={onClose} fit="contain fitscreen" fallback="🍑"
       img={view.meme?.butt ? `/api/meme/butt?v=${view.meme.butt}` : null} alt="Butthole emoji"
-      top="Butthole team of the week" bottom={d.name(bh.gid)}
-      stats={[[`${week.label} record`, fmtWL(bh)], ["Earned this week", fmt$(bh.earned)],
-        ["Ugliest loss", w ? `${w.team} lost by ${w.margin}` : "—"], ["Season rank", ordinal(d.rankLive[bh.gid])]]}
-      foot={`Worst record of ${week.label}. Ties go to more losses, then fewer dollars.`}
-      action={{ label: `See ${d.name(bh.gid)}'s teams`, onClick: () => onTeams(bh.gid) }} />
+      top="Butthole team of the week" bottom={crew.length > 1 ? `${crew.slice(0, -1).join(", ")} & ${crew.at(-1)}` : crew[0]} />
   );
 }
 
