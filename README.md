@@ -131,6 +131,9 @@ One service, no database add-on needed:
 
 Local + `npx localtunnel --port 4600` or Tailscale also works fine for draft night.
 
+`railway.json` starts `node server/index.js` directly. The server handles Railway's SIGTERM on
+each deploy by saving state and exiting cleanly, so replaced deploys don't show as failed.
+
 ## Updating inputs
 
 - `data/win-totals-2026.json` — sportsbook win totals (edit any time; next sync refits).
