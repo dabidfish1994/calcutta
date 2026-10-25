@@ -51,12 +51,31 @@ export const colorOf = (config, gid) => {
 };
 
 // ---- who is looking at the site (each friend picks their group) ----
+// Saved twice: localStorage and a server-set cookie. Safari clears script storage after ~7 days
+// without a visit; the cookie survives that, and whichever copy is left restores the other.
+// A personal link (…#/season&me=g3) picks the group automatically.
+const readCookie = k => { try { return decodeURIComponent(document.cookie.split("; ").find(c => c.startsWith(k + "="))?.split("=")[1] || "") || null; } catch { return null; } };
+const saveRemote = v => fetch("/api/me", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ group: v }) }).catch(() => {});
 export function useMe(view) {
-  const [me, setMeState] = useState(() => { try { return localStorage.getItem("cc-me"); } catch { return null; } });
+  const [me, setMeState] = useState(() => {
+    const fromLink = location.hash.match(/[&?]me=([\w-]+)/)?.[1];
+    if (fromLink) return fromLink;
+    let v = null; try { v = localStorage.getItem("cc-me"); } catch {}
+    return v || readCookie("cc_me");
+  });
+  const setMe = v => { try { localStorage.setItem("cc-me", v); } catch {} saveRemote(v); setMeState(v); };
+  useEffect(() => {
+    if (/[&?]me=/.test(location.hash)) history.replaceState(null, "", location.hash.replace(/[&?]me=[\w-]+/, "") || "#/season");
+  }, []);
+  useEffect(() => { // keep both copies alive
+    if (!me) return;
+    try { if (localStorage.getItem("cc-me") !== me) localStorage.setItem("cc-me", me); } catch {}
+    if (readCookie("cc_me") !== me) saveRemote(me);
+  }, [me]);
   const valid = me === "none" || view?.state?.config?.groups?.some(g => g.id === me);
-  const setMe = v => { try { localStorage.setItem("cc-me", v); } catch {} setMeState(v); };
   return [valid ? (me === "none" ? null : me) : undefined, setMe]; // undefined = hasn't chosen yet
 }
+export const personalLink = gid => `${location.origin}/#/season&me=${gid}`;
 
 // ---- tiny hash router: #/tab/arg&team=LAR&group=g3 (shareable links) ----
 function parseHash() {

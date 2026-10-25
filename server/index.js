@@ -123,6 +123,10 @@ let valuation = fs.existsSync(DATA("valuation.json"))
   : null;
 
 let profiles = loadProfiles(DATA_DIR);
+// Meme photos live on the Railway volume, never in the public repo.
+const MEME_IDS = ["buf", "fuller"];
+const memeFile = id => DATA(`meme-${id}.img`), memeMetaFile = id => DATA(`meme-${id}.json`);
+const memes = Object.fromEntries(MEME_IDS.map(id => { try { return [id, JSON.parse(fs.readFileSync(memeMetaFile(id), "utf8"))]; } catch { return [id, null]; } }));
 let nflStandings = (() => { try { return JSON.parse(fs.readFileSync(DATA("standings-2026.json"), "utf8")); } catch { return null; } })();
 
 let saveTimer = null;
@@ -439,6 +443,7 @@ function view() {
     undoLabel: undoStack.length ? undoStack[undoStack.length - 1].label ?? null : null,
     scoringProfile: { active: profiles.active, label: profiles.profiles[profiles.active]?.label || profiles.active, options: Object.fromEntries(Object.entries(profiles.profiles).map(([k, v]) => [k, v.label])) },
     payoutProfile: resolveProfile(profiles),
+    meme: Object.fromEntries(MEME_IDS.filter(id => memes[id]).map(id => [id, memes[id].ts])),
     nflStandings,
     admin: true
   };
@@ -739,6 +744,45 @@ app.post("/api/action", (req, res) => {
   res.json({ ok: !result.error, ...result });
 });
 let lastPublicSync = 0;
+// Which group this browser belongs to. Kept in a server-set cookie as well as localStorage:
+// Safari wipes script-written storage after ~7 days without a visit, but not server-set cookies.
+app.post("/api/me", (req, res) => {
+  const g = String(req.body?.group || "");
+  if (g !== "none" && !state.config.groups.some(x => x.id === g)) return res.status(400).json({ ok: false });
+  res.cookie("cc_me", g, { maxAge: 400 * 86400e3, sameSite: "lax", secure: req.secure, httpOnly: false, path: "/" });
+  res.json({ ok: true });
+});
+
+// Meme photos (the Bills fat finger, Fuller): admin uploads, everyone can see.
+const IMG_TYPES = { jpeg: [0xff, 0xd8, 0xff], png: [0x89, 0x50, 0x4e, 0x47], webp: [0x52, 0x49, 0x46, 0x46] };
+app.post("/api/admin/meme/:id", express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: "4mb" }), (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ ok: false, error: "admin only" });
+  const id = req.params.id;
+  if (!MEME_IDS.includes(id)) return res.status(404).json({ ok: false, error: "unknown meme" });
+  const buf = req.body;
+  const kind = Buffer.isBuffer(buf) && Object.entries(IMG_TYPES).find(([, sig]) => sig.every((b, i) => buf[i] === b))?.[0];
+  if (!kind) return res.status(400).json({ ok: false, error: "send a JPEG, PNG or WebP image" });
+  fs.writeFileSync(memeFile(id), buf);
+  memes[id] = { type: `image/${kind}`, ts: Date.now(), bytes: buf.length };
+  fs.writeFileSync(memeMetaFile(id), JSON.stringify(memes[id]));
+  broadcast();
+  res.json({ ok: true, ...memes[id] });
+});
+app.delete("/api/admin/meme/:id", (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ ok: false, error: "admin only" });
+  const id = req.params.id;
+  if (!MEME_IDS.includes(id)) return res.status(404).json({ ok: false });
+  try { fs.unlinkSync(memeFile(id)); } catch {}
+  try { fs.unlinkSync(memeMetaFile(id)); } catch {}
+  memes[id] = null; broadcast(); res.json({ ok: true });
+});
+app.get("/api/meme/:id", (req, res) => {
+  const id = req.params.id, m = memes[id];
+  if (!MEME_IDS.includes(id) || !m || !fs.existsSync(memeFile(id))) return res.status(404).end();
+  res.set({ "Content-Type": m.type, "Cache-Control": "public, max-age=86400" });
+  res.sendFile(memeFile(id));
+});
+
 app.post("/api/sync", async (req, res) => {
   if (isAdmin(req)) return res.json(await syncScores({ force: !!req.body?.force }));
   if (Date.now() - lastPublicSync < 120e3) return res.json({ ok: true, skipped: true });

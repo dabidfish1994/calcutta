@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, membersOf } from "./avatars.jsx";
 import {
   fmt$, fmtSigned$, fmtPct, pctRound, logo, moji, shortName, memberNames, groupName,
-  colorOf, gameStatus, recStr, dayLabel
+  colorOf, gameStatus, recStr, dayLabel, personalLink
 } from "./util.jsx";
 
 const ordinal = n => n + (["th", "st", "nd", "rd"][(n % 100 >> 3) ^ 1 && n % 10] || "th");
@@ -151,7 +151,7 @@ function Crew({ d, gid, me, size = 20 }) {
 }
 
 // ---------------- game card (scoreboard style) ----------------
-function GameCard({ d, g, me }) {
+function GameCard({ d, g, me, onMeme }) {
   const mine = me && (g.homeOwners?.[me] > 0 || g.awayOwners?.[me] > 0);
   const live = g.state === "in";
   const pending = !g.final && g.state !== "post";
@@ -160,8 +160,10 @@ function GameCard({ d, g, me }) {
     { team: g.home, score: g.homeScore, own: g.homeOwners, p: g.pHome }
   ];
   const rec = t => recStr(d.record(t));
+  const bills = onMeme && (g.home === "BUF" || g.away === "BUF");
+  const tap = bills ? { role: "button", tabIndex: 0, onClick: () => onMeme("tap"), onKeyDown: e => e.key === "Enter" && onMeme("tap") } : {};
   return (
-    <div className={"gcard" + (mine ? " mine" : "") + (live ? " live" : "")} style={mine ? { "--mine": d.color(me) } : undefined}>
+    <div className={"gcard" + (mine ? " mine" : "") + (live ? " live" : "") + (bills ? " clickable" : "")} style={mine ? { "--mine": d.color(me) } : undefined} {...tap}>
       <div className="gstatus"><span className={live ? "livepill" : "dim"}>{gameStatus(g)}</span>{g.neutral && <span className="dim"> · neutral site</span>}</div>
       {rows.map(r => {
         const won = g.final && g.winner === r.team, lost = g.final && g.winner && g.winner !== r.team;
@@ -197,6 +199,17 @@ export function Season({ view, me }) {
   const [syncing, setSyncing] = useState(false);
   const [wkSel, setWkSel] = useState(null);
   const [onlyMine, setOnlyMine] = useState(false);
+  const [meme, setMeme] = useState(null);
+  const lastBillsLoss = useMemo(() => d.weeks.flatMap(w => w.games)
+    .filter(g => (g.home === "BUF" || g.away === "BUF") && g.final && g.winner && g.winner !== "BUF")
+    .sort((a, b) => b.date.localeCompare(a.date))[0] || null, [d]);
+  useEffect(() => { // every Bills loss gets one popup per device, for a week
+    if (!lastBillsLoss || Date.now() - Date.parse(lastBillsLoss.date) > 7 * 86400e3) return;
+    let seen = []; try { seen = JSON.parse(localStorage.getItem("cc-ff-seen") || "[]"); } catch {}
+    if (seen.includes(lastBillsLoss.id)) return;
+    try { localStorage.setItem("cc-ff-seen", JSON.stringify([...seen, lastBillsLoss.id].slice(-40))); } catch {}
+    setMeme("loss");
+  }, [lastBillsLoss?.id]);
   const pot = d.pot;
   const weeks = d.weeks;
   const curKey = wkSel || season?.currentWeek || weeks[0]?.key;
@@ -214,9 +227,11 @@ export function Season({ view, me }) {
     const banked = d.bankedBy(t, gid); // trades aren't retroactive: credits follow ownership at each kickoff
     const projected = banked + ((pt.futureShare || 0) / 100) * pot * stake;
     const paid = d.paidFor(t, gid);
+    const bills = t === "BUF";
+    const tap = bills ? { role: "button", tabIndex: 0, onClick: () => setMeme("tap"), onKeyDown: e => e.key === "Enter" && setMeme("tap") } : {};
     return (
-      <div key={t} className={"spot" + (gid === me ? "" : " rival")}>
-        <div className="spothead"><img src={logo(t)} alt="" /><div><b>{moji(t)} {teams[t].name}</b><div className="dim">{recStr(d.record(t))}{stake < 1 ? ` · ${fmtPct(stake * 100)} stake` : ""} · net cost {fmt$(paid)}</div></div></div>
+      <div key={t} className={"spot" + (gid === me ? "" : " rival") + (bills ? " clickable" : "")} {...tap}>
+        <div className="spothead"><img src={logo(t)} alt="" /><div><b>{moji(t)} {teams[t].name}{bills ? " 💸" : ""}</b><div className="dim">{recStr(d.record(t))}{stake < 1 ? ` · ${fmtPct(stake * 100)} stake` : ""} · net cost {fmt$(paid)}</div></div></div>
         <div className="spotnums">
           <div><label>banked</label><b>{fmt$(banked)}</b></div>
           <div><label>projected</label><b>{fmt$(projected)}</b></div>
@@ -248,8 +263,8 @@ export function Season({ view, me }) {
           {groups.map(g => {
             const s = summaries[g.id]; const pj = proj[g.id] || {};
             return (
-              <tr key={g.id} className={g.id === me ? "hl" : ""}>
-                <td>{memberNames(g.name)}</td>
+              <tr key={g.id} className={(g.id === me ? "hl" : "") + (g.id === FULLER_GROUP ? " clickable" : "")} onClick={g.id === FULLER_GROUP ? () => setMeme("fuller") : undefined}>
+                <td>{memberNames(g.name)}{g.id === FULLER_GROUP ? " 🤵" : ""}</td>
                 <td className="r">{d.teamsOf(g.id).length}</td>
                 <td className="r">{fmt$(s.earnedDollars)}</td>
                 <td className="r">{fmt$(pj.projectedEarned || 0)}</td>
@@ -280,7 +295,9 @@ export function Season({ view, me }) {
               <span className="rosteravatars">
                 {membersOf(g.name).map(n => <Avatar key={n} name={n} title={n} size={22} mode={me ? "weak" : "hero"} />)}
               </span>
-              <b>{memberNames(g.name)}</b>
+              {g.id === FULLER_GROUP
+                ? <button className="linkish" onClick={() => setMeme("fuller")}><b>{memberNames(g.name)} 🤵</b></button>
+                : <b>{memberNames(g.name)}</b>}
               <span className="dim">{held.length} team{held.length === 1 ? "" : "s"} · spent {fmt$(s.spent - s.tradeCash)} · banked {fmt$(s.earnedDollars)} · proj. net{" "}
                 <b className={(pj.projectedNet || 0) >= 0 ? "green" : "red"}>{(pj.projectedNet || 0) >= 0 ? "+" : ""}{fmt$(pj.projectedNet || 0)}</b>
               </span>
@@ -313,11 +330,90 @@ export function Season({ view, me }) {
       {byDay.map(day => (
         <div key={day.day}>
           <h3>{day.day}</h3>
-          <div className="gcards">{day.games.map(g => <GameCard key={g.id} d={d} g={g} me={me} />)}</div>
+          <div className="gcards">{day.games.map(g => <GameCard key={g.id} d={d} g={g} me={me} onMeme={setMeme} />)}</div>
         </div>
       ))}
       {week && !games.length && <p className="dim">None of your teams play this week.</p>}
+      {meme === "fuller" ? <FullerMeme view={view} d={d} onClose={() => setMeme(null)} />
+        : meme && <FatFinger view={view} d={d} reason={meme} onClose={() => setMeme(null)} />}
     </div>
+  );
+}
+
+// ---------------- meme popups ----------------
+function MemePopup({ label, img, alt, top, bottom, quote, cite, stats, foot, onClose }) {
+  useEffect(() => {
+    const f = e => e.key === "Escape" && onClose();
+    addEventListener("keydown", f);
+    return () => removeEventListener("keydown", f);
+  }, [onClose]);
+  return (
+    <div className="sheetback" onClick={onClose}>
+      <div className="sheet meme-sheet" role="dialog" aria-modal="true" aria-label={label} onClick={e => e.stopPropagation()}>
+        <div className="meme">
+          {img ? <img src={img} alt={alt} /> : <div className="memefallback" aria-hidden="true">🫰</div>}
+          <span className="memetext top">{top}</span>
+          <span className="memetext bottom">{bottom}</span>
+        </div>
+        {quote && <blockquote className="memequote">“{quote}”<cite>{cite}</cite></blockquote>}
+        <div className="memestats">{stats.map(([l, v, tone]) => <div key={l}><label>{l}</label><b className={tone || ""}>{v}</b></div>)}</div>
+        {foot && <p className="small">{foot}</p>}
+        <button className="go" onClick={onClose}>😂 Close</button>
+      </div>
+    </div>
+  );
+}
+
+// Sept 3, Calcutta Time chat: "That was an accidental fat finger." He meant $300.
+function FatFinger({ view, d, reason, onClose }) {
+  const sale = view.state.auction.sales.BUF;
+  if (!sale) return null;
+  const paid = sale.amount, P = d.P;
+  const rec = d.record("BUF");
+  const banked = d.banked$("BUF"), projected = d.projected$("BUF");
+  const winPay = d.$(P.regWin), wc = (P.wcWin || 0) + (P.reachDiv || 0);
+  const runs = [
+    ["missing the playoffs", 0], ["a Wild Card exit", P.berth], ["a Divisional exit", P.berth + wc],
+    ["losing the AFC title game", P.berth + wc + P.divWin], ["losing the Super Bowl", P.berth + wc + P.divWin + P.confWin],
+    ["winning the Super Bowl", P.berth + wc + P.divWin + P.confWin + P.sbWin]
+  ];
+  const left = 17 - rec.w - rec.l - rec.t;
+  const ways = runs.map(([label, w]) => ({ label, need: Math.max(0, Math.ceil((paid - d.$(w)) / winPay)) }))
+    .filter(x => x.need <= rec.w + left);
+  const breakEven = !ways.length ? "Mathematically impossible now."
+    : ways[0].need <= rec.w ? "Win the Super Bowl and it's paid off."
+      : ways.slice(0, 2).map(x => `${x.need}+ wins and ${x.label}`).join(", or ");
+  const lost = reason === "loss";
+  return (
+    <MemePopup label="The Bills fat finger" onClose={onClose}
+      img={view.meme?.buf ? `/api/meme/buf?v=${view.meme.buf}` : null}
+      alt="The commissioner, moments after bidding $3,000 on the Bills"
+      top={lost ? (rec.l > 1 ? "Bills lost again" : "Bills lost") : `Paid ${fmt$(paid)} for the Bills`}
+      bottom={lost ? `Still paid ${fmt$(paid)}` : "Meant to type $300"}
+      quote="That was an accidental fat finger." cite="dylan.burke, Calcutta Time chat, Sept 3"
+      stats={[["Bills", recStr(rec)], ["Earned so far", fmt$(banked)], ["Projected season", fmt$(projected)],
+        ["Cost of the extra zero", fmtSigned$(projected - paid), projected - paid >= 0 ? "green" : "red"]]}
+      foot={<><b>To break even:</b> {breakEven}</>} />
+  );
+}
+
+// Mark · Fuller: spent the least of any group that actually bid, and lead the league anyway.
+const FULLER_GROUP = "g4";
+function FullerMeme({ view, d, onClose }) {
+  const g = d.groups.find(x => x.id === FULLER_GROUP);
+  if (!g) return null;
+  const s = d.stats(FULLER_GROUP);
+  const left = (g.budget || 7000) - (view.summaries[FULLER_GROUP]?.spent || 0);
+  const ord = n => n + (["th", "st", "nd", "rd"][(n % 100 >> 3) ^ 1 && n % 10] || "th");
+  return (
+    <MemePopup label="Fuller" onClose={onClose}
+      img={view.meme?.fuller ? `/api/meme/fuller?v=${view.meme.fuller}` : null}
+      alt="Fuller in a tuxedo, checking the standings"
+      top={`Left ${fmt$(left)} on the table`}
+      bottom={s.rank === 1 ? "Still in 1st place" : `${ord(s.rank)} place. Unbothered.`}
+      stats={[["Money banked", fmt$(s.banked)], ["League rank", ord(s.rank)], ["Spent at auction", fmt$(s.netCost)],
+        ["Projected net", fmtSigned$(s.projNet), s.projNet >= 0 ? "green" : "red"]]}
+      foot={`${d.name(FULLER_GROUP)}: ${s.teams.length} teams, ${+s.record.w.toFixed(1)}–${+s.record.l.toFixed(1)} combined.`} />
   );
 }
 
@@ -453,7 +549,7 @@ export function WhoAreYou({ view, me, onPick, onClose }) {
     <div className="sheetback" onClick={onClose}>
       <div className="sheet who" role="dialog" aria-modal="true" aria-label="Pick your group" onClick={e => e.stopPropagation()}>
         <h2>Which group are you?</h2>
-        <p className="dim small">Your group gets highlighted everywhere and "Your week" shows your games. Saved on this device only.</p>
+        <p className="dim small">Your group gets highlighted everywhere and you can filter to your games. This browser remembers your pick.</p>
         <div className="whogrid">
           {d.groups.map(g => (
             <button key={g.id} className={"whobtn" + (g.id === me ? " on" : "")} style={{ "--mine": d.color(g.id) }} onClick={() => onPick(g.id)}>
@@ -463,7 +559,20 @@ export function WhoAreYou({ view, me, onPick, onClose }) {
           ))}
         </div>
         <button className="seg" onClick={() => onPick("none")}>Just browsing</button>
+        {me && <CopyLink gid={me} name={d.name(me)} />}
       </div>
     </div>
+  );
+}
+
+function CopyLink({ gid, name }) {
+  const [done, setDone] = useState(false);
+  return (
+    <p className="dim small">
+      Send your group its own link so nobody has to pick:{" "}
+      <button className="tiny" onClick={async () => {
+        try { await navigator.clipboard.writeText(personalLink(gid)); setDone(true); setTimeout(() => setDone(false), 1800); } catch {}
+      }}>{done ? "Copied" : `Copy ${name}'s link`}</button>
+    </p>
   );
 }

@@ -350,3 +350,27 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .calcout > div { display: flex; flex-direction: column; gap: .1rem; }
 .calcout label { font-size: .64rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
 .calcout b { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+
+/* the Bills fat finger */
+.clickable { cursor: pointer; }
+.gcard.clickable:hover, .spot.clickable:hover { border-color: var(--amber); }
+.sheet.meme-sheet { max-width: 26rem; display: flex; flex-direction: column; gap: .6rem; padding-top: 1rem; }
+.meme { position: relative; border-radius: 12px; overflow: hidden; background: #000; }
+.meme img { display: block; width: 100%; aspect-ratio: 4 / 5; object-fit: cover; object-position: 50% 32%; }
+.memefallback { aspect-ratio: 4 / 5; display: grid; place-items: center; font-size: 6rem; }
+.memetext {
+  position: absolute; left: .4rem; right: .4rem; display: block; text-align: center; text-transform: uppercase;
+  white-space: normal; overflow-wrap: break-word; text-wrap: balance;
+  font-family: Impact, "Haettenschweiler", "Arial Narrow Bold", "Arial Black", sans-serif; font-weight: 900;
+  font-size: clamp(1.3rem, 6.6vw, 2rem); line-height: 1.04; letter-spacing: .01em; color: #fff;
+  -webkit-text-stroke: 1.5px #000; paint-order: stroke fill; text-shadow: 0 0 6px rgba(0,0,0,.85), 0 2px 2px #000;
+}
+.memetext.top { top: .5rem; } .memetext.bottom { bottom: .6rem; }
+.memequote { margin: 0; padding: .1rem 0 .1rem .8rem; border-left: 3px solid var(--amber); font-style: italic; }
+.memequote cite { display: block; font-style: normal; font-size: .75rem; color: var(--dim); margin-top: .2rem; }
+.memestats { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+.memestats > div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .45rem .6rem; display: flex; flex-direction: column; }
+.memestats label { font-size: .62rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+.memestats b { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.linkish { background: none; border: none; padding: 0; color: var(--ink); font-size: inherit; cursor: pointer; }
+.tbl tr.clickable:hover td { background: var(--panel); }
