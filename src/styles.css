@@ -359,6 +359,14 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .clickable { cursor: pointer; }
 .sheet.meme-sheet { max-width: 26rem; display: flex; flex-direction: column; gap: .6rem; padding-top: 1rem; }
 .sheet.meme-sheet > *, .sheet.team-sheet > * { flex-shrink: 0; } /* scroll the sheet, never squash the picture */
+.meme-sheet .meme { align-self: center; width: 100%; max-width: 100%; } /* width gets narrowed by useFitPicture on small screens */
+/* compact for phones: the 4 stat tiles in one row, the two buttons side by side */
+.meme-sheet .memestats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .3rem; }
+.meme-sheet .memestats > div { padding: .35rem .4rem; }
+.meme-sheet .memestats label { font-size: .56rem; letter-spacing: .04em; line-height: 1.25; }
+.meme-sheet .memestats b { font-size: .92rem; margin-top: auto; }
+.memebtns { display: flex; gap: .5rem; }
+.memebtns > button { flex: 1; }
 .meme { position: relative; border-radius: 12px; overflow: hidden; background: #000; }
 .meme img { display: block; width: 100%; aspect-ratio: 4 / 5; object-fit: cover; object-position: 50% 32%; }
 .memefallback { aspect-ratio: 4 / 5; display: grid; place-items: center; font-size: 6rem; }

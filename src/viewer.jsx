@@ -394,15 +394,37 @@ export function Season({ view, me }) {
 }
 
 // ---------------- meme popups ----------------
+// If the popup doesn't fit on screen (small phones), shrink the picture just enough, keeping its
+// shape, down to 60% of its size; past that the popup scrolls.
+function useFitPicture(sheetRef, dep) {
+  useEffect(() => {
+    const sh = sheetRef.current, frame = sh?.querySelector(".meme");
+    if (!frame) return;
+    const fit = () => {
+      frame.style.width = "";
+      const pic = frame.querySelector("img, .memefallback"), over = sh.scrollHeight - sh.clientHeight;
+      const r = pic?.getBoundingClientRect();
+      if (over > 1 && r?.height) frame.style.width = `${r.width * Math.max(0.6, (r.height - over) / r.height)}px`;
+    };
+    fit();
+    const pic = frame.querySelector("img");
+    pic?.addEventListener("load", fit);
+    addEventListener("resize", fit);
+    return () => { pic?.removeEventListener("load", fit); removeEventListener("resize", fit); };
+  }, [dep]);
+}
+
 function MemePopup({ label, img, alt, fit, fallback = "🫰", top, bottom, quote, cite, stats, foot, action, onClose }) {
   useEffect(() => {
     const f = e => e.key === "Escape" && onClose();
     addEventListener("keydown", f);
     return () => removeEventListener("keydown", f);
   }, [onClose]);
+  const sheet = useRef(null);
+  useFitPicture(sheet, img);
   return (
     <div className="sheetback" onClick={onClose}>
-      <div className="sheet meme-sheet" role="dialog" aria-modal="true" aria-label={label} onClick={e => e.stopPropagation()}>
+      <div ref={sheet} className="sheet meme-sheet" role="dialog" aria-modal="true" aria-label={label} onClick={e => e.stopPropagation()}>
         <div className={"meme" + (fit ? ` ${fit}` : "")}>
           {img ? <img src={img} alt={alt} /> : <div className="memefallback" aria-hidden="true">{fallback}</div>}
           {top && <span className="memetext top">{top}</span>}
@@ -411,8 +433,10 @@ function MemePopup({ label, img, alt, fit, fallback = "🫰", top, bottom, quote
         {quote && <blockquote className="memequote">“{quote}”<cite>{cite}</cite></blockquote>}
         {stats && <div className="memestats">{stats.map(([l, v, tone]) => <div key={l}><label>{l}</label><b className={tone || ""}>{v}</b></div>)}</div>}
         {foot && <p className="small">{foot}</p>}
-        {action && <button onClick={action.onClick}>{action.label}</button>}
-        <button className="go" onClick={onClose}>😂 Close</button>
+        <div className="memebtns">
+          {action && <button onClick={action.onClick}>{action.label}</button>}
+          <button className="go" onClick={onClose}>😂 Close</button>
+        </div>
       </div>
     </div>
   );
@@ -463,7 +487,7 @@ const GROUP_MEMES = {
 function GroupMeme({ view, d, gid, onClose, onTeams }) {
   const m = GROUP_MEMES[gid];
   if (!m || !d.groups.some(x => x.id === gid)) return null;
-  const action = { label: `See ${d.name(gid)}'s teams`, onClick: onTeams };
+  const action = { label: "See their teams", onClick: onTeams };
   if (m.bills) return <FatFinger view={view} d={d} reason="tap" action={action} onClose={onClose} />;
   const s = d.stats(gid);
   return (
