@@ -215,6 +215,11 @@ export function Season({ view, me }) {
     try { localStorage.setItem("cc-ff-seen", JSON.stringify([...seen, lastBillsLoss.id].slice(-40))); } catch {}
     setMeme("loss");
   }, [lastBillsLoss?.id]);
+  const memeKey = JSON.stringify(view.meme || {});
+  useEffect(() => { // warm the meme photos so a popup opens with its picture already loaded
+    const timer = setTimeout(() => Object.entries(view.meme || {}).forEach(([id, v]) => { new Image().src = `/api/meme/${id}?v=${v}`; }), 2500);
+    return () => clearTimeout(timer);
+  }, [memeKey]);
   const pot = d.pot;
   const weeks = d.weeks;
   const curKey = wkSel || season?.currentWeek || weeks[0]?.key;
@@ -371,7 +376,7 @@ function MemePopup({ label, img, alt, top, bottom, quote, cite, stats, foot, act
 }
 
 // Sept 3, Calcutta Time chat: "That was an accidental fat finger."
-function FatFinger({ view, d, reason, onClose }) {
+function FatFinger({ view, d, reason, action, onClose }) {
   const sale = view.state.auction.sales.BUF;
   if (!sale) return null;
   const paid = sale.amount, P = d.P;
@@ -399,19 +404,22 @@ function FatFinger({ view, d, reason, onClose }) {
       quote="That was an accidental fat finger." cite="dylan.burke, Calcutta Time chat, Sept 3"
       stats={[["Bills", recStr(rec)], ["Earned so far", fmt$(banked)], ["Projected season", fmt$(projected)],
         ["Cost of the extra zero", fmtSigned$(projected - paid), projected - paid >= 0 ? "green" : "red"]]}
-      foot={<><b>To break even:</b> {breakEven}</>} />
+      foot={<><b>To break even:</b> {breakEven}</>} action={action} />
   );
 }
 
 // Group memes: tap the group in the standings or on its roster header. Photos live on the
 // server volume (POST /api/admin/meme/<id>), never in the repo.
 const GROUP_MEMES = {
+  g2: { bills: true, tag: "💸" }, // Dylan's group gets the fat-finger meme
   g4: { id: "fuller", tag: "🤵", label: "Fuller", alt: "Fuller in a tuxedo, checking the standings", top: `6'7"`, bottom: "Can't dunk" },
   g6: { id: "mike", tag: "🍼", label: "Mike", alt: "Mike in a hanbok and gat in Seoul", bottom: "Our wittle brother" }
 };
 function GroupMeme({ view, d, gid, onClose, onTeams }) {
   const m = GROUP_MEMES[gid];
   if (!m || !d.groups.some(x => x.id === gid)) return null;
+  const action = { label: `See ${d.name(gid)}'s teams`, onClick: onTeams };
+  if (m.bills) return <FatFinger view={view} d={d} reason="tap" action={action} onClose={onClose} />;
   const s = d.stats(gid);
   return (
     <MemePopup label={m.label} onClose={onClose}
@@ -420,7 +428,7 @@ function GroupMeme({ view, d, gid, onClose, onTeams }) {
       stats={[["Money banked", fmt$(s.banked)], ["League rank", ordinal(s.rank)], ["Spent at auction", fmt$(s.netCost)],
         ["Projected net", fmtSigned$(s.projNet), s.projNet >= 0 ? "green" : "red"]]}
       foot={`${d.name(gid)}: ${s.teams.length} team${s.teams.length === 1 ? "" : "s"}, ${+s.record.w.toFixed(1)}–${+s.record.l.toFixed(1)} combined.`}
-      action={{ label: `See ${d.name(gid)}'s teams`, onClick: onTeams }} />
+      action={action} />
   );
 }
 
